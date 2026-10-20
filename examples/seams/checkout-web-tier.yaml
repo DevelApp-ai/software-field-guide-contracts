@@ -1,0 +1,24 @@
+# Seam contract — The Software Field Guide, "Segmenting the Estate".
+# Six answers plus a rehearsal date. Example dates are chosen relative to
+# the CI anchor date 2026-10-20.
+seam: checkout-web-tier
+enclave: checkout
+
+# How traffic and identity arrive. Naming an identity mechanism
+# (auth, mTLS, SVID, token, identity) avoids the validator's warning.
+entry: >-
+  Internet-facing endpoint behind the edge gateway; mTLS terminates at the
+  gateway and requests continue with a forwarded identity token.
+
+# Who gets in and who is denied. Stating a deny rule avoids the warning.
+decision: Default deny at the gateway; each route is an explicit allow.
+
+# How the seam is watched.
+monitoring: >-
+  Gateway access logs, p99 latency metric, alert on 5xx rate.
+
+blastRadius: A spoofed session can read one customer's cart
+killPath: Drop the gateway route; the edge fails closed
+
+lastRehearsed: 2026-08-30
+reviewDate: 2026-12-01

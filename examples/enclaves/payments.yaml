@@ -1,0 +1,17 @@
+# Enclave contract — The Software Field Guide, "Segmenting the Estate".
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+enclave: payments
+owner: Payments team
+
+trustedIdentityPlanes:
+  - plane: internal-services
+    provider: mtls-svid
+
+borderInventory:
+  - payments-3ds-redirect
+
+blastRadius:
+  data: Charge attempts and masked card references
+  statedLimit: One payment provider account, 24 hours
+
+reviewedOn: 2026-09-02

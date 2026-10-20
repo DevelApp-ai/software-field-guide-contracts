@@ -1,0 +1,19 @@
+# Seam contract — The Software Field Guide, "Segmenting the Estate".
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+seam: payments-3ds-redirect
+enclave: payments
+
+entry: >-
+  Browser redirect back from the 3-D Secure provider; the callback is
+  authenticated with a signed token tied to the original auth challenge.
+
+decision: Verify the callback signature and deny unverified callbacks.
+
+monitoring: >-
+  Every callback logged and counted; alert on verification failure rate.
+
+blastRadius: A forged callback could mark a charge as completed
+killPath: Disable the callback route; pending charges fail closed
+
+lastRehearsed: 2026-09-10
+reviewDate: 2026-11-15

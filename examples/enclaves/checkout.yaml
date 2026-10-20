@@ -1,0 +1,24 @@
+# Enclave contract — The Software Field Guide, "Segmenting the Estate".
+# Four answers plus a review date. The example dates are chosen relative to
+# the CI anchor date 2026-10-20 (see Makefile and .github/workflows/ci.yml).
+enclave: checkout
+owner: Checkout team
+
+# At least one trusted identity plane: an enclave that trusts no identity
+# serves no one.
+trustedIdentityPlanes:
+  - plane: customer-web
+    provider: opaque-token
+  - plane: internal-services
+    provider: mtls-svid
+
+# The seams that make up this enclave's border. Each name must have a seam
+# contract somewhere in the estate (checked by `make check-bundle`).
+borderInventory:
+  - checkout-web-tier
+
+blastRadius:
+  data: Cart contents and customer profile cache
+  statedLimit: Cart rows for one storefront, one hour
+
+reviewedOn: 2026-09-15
