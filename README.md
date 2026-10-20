@@ -119,4 +119,4 @@ Makefile            check/test/build/site/e2e/check-* targets
 
 ## License
 
-TBD — license choice deliberately left to the repo owner.
+[MIT](LICENSE) — same license as the book’s public tooling.
