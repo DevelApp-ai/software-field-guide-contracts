@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estate and Seam Contract Validator — The Software Field Guide</title>
+<style>
+	:root {
+		--ink: #1c2333;
+		--muted: #5b6478;
+		--line: #d8dce6;
+		--bg: #f7f8fb;
+		--accent: #2952cc;
+		--error: #b3261e;
+		--warning: #946200;
+		--ok: #146c2e;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+		color: var(--ink);
+		background: var(--bg);
+	}
+	header {
+		padding: 28px 24px 18px;
+		border-bottom: 1px solid var(--line);
+		background: #fff;
+	}
+	h1 { font-size: 1.45rem; margin: 0 0 4px; }
+	header p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+	main { max-width: 880px; margin: 0 auto; padding: 20px 24px 64px; }
+	.tabs { display: flex; gap: 8px; margin: 22px 0 0; flex-wrap: wrap; }
+	.tabs button {
+		font: inherit;
+		font-weight: 600;
+		padding: 8px 18px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: #fff;
+		color: var(--ink);
+		cursor: pointer;
+	}
+	.tabs button[aria-selected="true"] {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: #eef2ff;
+	}
+	.panel { display: none; margin-top: 18px; }
+	.panel.active { display: block; }
+	.panel > p.hint { color: var(--muted); font-size: 0.95rem; margin: 0 0 14px; }
+	label { display: block; font-weight: 600; font-size: 0.9rem; margin: 14px 0 6px; }
+	textarea {
+		width: 100%;
+		min-height: 240px;
+		font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+		padding: 12px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fff;
+		color: var(--ink);
+		resize: vertical;
+	}
+	textarea:focus, input:focus { outline: 2px solid #c7d2f5; border-color: var(--accent); }
+	.row { display: flex; gap: 12px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+	.row .spacer { flex: 1; }
+	button.primary {
+		font: inherit;
+		font-weight: 700;
+		padding: 9px 22px;
+		border: none;
+		border-radius: 8px;
+		background: var(--accent);
+		color: #fff;
+		cursor: pointer;
+	}
+	button.primary:disabled { background: #9aa4bf; cursor: wait; }
+	button.ghost {
+		font: inherit;
+		padding: 8px 14px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fff;
+		cursor: pointer;
+	}
+	input[type="date"] {
+		font: inherit;
+		padding: 7px 10px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fff;
+		color: var(--ink);
+	}
+	#results { margin-top: 22px; display: none; }
+	.verdict {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-weight: 700;
+		font-size: 1.05rem;
+		padding: 12px 16px;
+		border-radius: 8px;
+		margin-bottom: 14px;
+	}
+	.verdict.ok { background: #e7f6ec; color: var(--ok); }
+	.verdict.bad { background: #fbecea; color: var(--error); }
+	.finding {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fff;
+		padding: 12px 16px;
+		margin-bottom: 10px;
+	}
+	.finding .sev {
+		display: inline-block;
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		padding: 2px 9px;
+		border-radius: 999px;
+		margin-right: 8px;
+		vertical-align: 1px;
+	}
+	.finding .sev.error { background: #fbecea; color: var(--error); }
+	.finding .sev.warning { background: #fff3d6; color: var(--warning); }
+	.finding .rule { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; color: var(--muted); }
+	.finding .path { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; color: var(--accent); word-break: break-all; }
+	.finding .msg { margin: 4px 0 2px; }
+	.status {
+		display: none;
+		margin-top: 14px;
+		padding: 10px 14px;
+		border-radius: 8px;
+		background: #fff3d6;
+		color: var(--warning);
+		font-size: 0.92rem;
+	}
+	footer {
+		max-width: 880px;
+		margin: 0 auto;
+		padding: 0 24px 40px;
+		color: var(--muted);
+		font-size: 0.88rem;
+	}
+	footer code, .hint code { background: #eef0f5; padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<header>
+	<h1>Estate and Seam Contract Validator</h1>
+	<p>Companion to <em>The Software Field Guide</em>, chapter “Segmenting the Estate”. Contracts are checked in your browser by the same Rego policies the CLI runs — nothing is uploaded.</p>
+</header>
+<main>
+	<div class="tabs" role="tablist">
+		<button role="tab" id="tab-enclave" aria-selected="true">Enclave contract</button>
+		<button role="tab" id="tab-seam" aria-selected="false">Seam contract</button>
+		<button role="tab" id="tab-bundle" aria-selected="false">Whole estate</button>
+	</div>
+
+	<section class="panel active" id="panel-enclave">
+		<p class="hint">Paste an <strong>enclave contract</strong> as JSON — four answers plus a review date: <code>enclave</code>, <code>owner</code>, <code>trustedIdentityPlanes</code>, <code>borderInventory</code>, <code>blastRadius</code>, <code>reviewedOn</code>. Convert YAML with <code>yq -o=json '.' enclave.yaml</code>.</p>
+		<textarea id="editor-enclave" spellcheck="false"></textarea>
+	</section>
+
+	<section class="panel" id="panel-seam">
+		<p class="hint">Paste a <strong>seam contract</strong> as JSON — six answers plus a rehearsal date: <code>seam</code>, <code>enclave</code>, <code>entry</code>, <code>decision</code>, <code>monitoring</code>, <code>blastRadius</code>, <code>killPath</code>, <code>lastRehearsed</code>, <code>reviewDate</code>.</p>
+		<textarea id="editor-seam" spellcheck="false"></textarea>
+	</section>
+
+	<section class="panel" id="panel-bundle">
+		<p class="hint">Paste the <strong>whole estate</strong> as JSON: <code>{"enclaves": [...], "seams": [...]}</code>. This checks names are unique, every seam belongs to an enclave, and every border inventory entry has a seam contract behind it.</p>
+		<textarea id="editor-bundle" spellcheck="false"></textarea>
+	</section>
+
+	<div class="row">
+		<label for="today" id="today-label">Validate as of</label>
+		<input type="date" id="today">
+		<div class="spacer"></div>
+		<button class="ghost" id="load-example">Load example</button>
+		<button class="primary" id="validate">Validate</button>
+	</div>
+	<div class="status" id="status"></div>
+
+	<div id="results">
+		<div class="verdict" id="verdict"></div>
+		<div id="findings"></div>
+	</div>
+</main>
+<footer>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalent: <code>make check-enclave FILE=...</code>.</p>
+</footer>
+
+<script type="module">
+const tabs = [
+	{ id: 'enclave', pkg: 'estate.enclave' },
+	{ id: 'seam', pkg: 'estate.seam' },
+	{ id: 'bundle', pkg: 'estate.cross' },
+];
+let active = 'enclave';
+const policyCache = {};
+
+const $ = (sel) => document.querySelector(sel);
+const editor = (id) => document.getElementById('editor-' + id);
+const todayInput = document.getElementById('today');
+const validateBtn = document.getElementById('validate');
+const exampleBtn = document.getElementById('load-example');
+const results = document.getElementById('results');
+const verdict = document.getElementById('verdict');
+const findingsBox = document.getElementById('findings');
+const statusBox = document.getElementById('status');
+
+const examples = {
+	enclave: {
+		enclave: 'checkout',
+		owner: 'Checkout team',
+		trustedIdentityPlanes: [
+			{ plane: 'customer-web', provider: 'opaque-token' },
+			{ plane: 'internal-services', provider: 'mtls-svid' },
+		],
+		borderInventory: ['checkout-web-tier'],
+		blastRadius: {
+			data: 'Cart contents and customer profile cache',
+			statedLimit: 'Cart rows for one storefront, one hour',
+		},
+		reviewedOn: '2026-09-15',
+	},
+	seam: {
+		seam: 'checkout-web-tier',
+		enclave: 'checkout',
+		entry: 'Internet-facing endpoint behind the edge gateway; mTLS terminates at the gateway and requests continue with a forwarded identity token',
+		decision: 'Default deny at the gateway; each route is an explicit allow',
+		monitoring: 'Gateway access logs, p99 latency metric, alert on 5xx rate',
+		blastRadius: "A spoofed session can read one customer's cart",
+		killPath: 'Drop the gateway route; the edge fails closed',
+		lastRehearsed: '2026-08-30',
+		reviewDate: '2026-12-01',
+	},
+	bundle: null, // filled below
+};
+examples.bundle = {
+	enclaves: [examples.enclave, {
+		enclave: 'payments',
+		owner: 'Payments team',
+		trustedIdentityPlanes: [{ plane: 'internal-services', provider: 'mtls-svid' }],
+		borderInventory: ['payments-3ds-redirect'],
+		blastRadius: {
+			data: 'Charge attempts and masked card references',
+			statedLimit: 'One payment provider account, 24 hours',
+		},
+		reviewedOn: '2026-09-02',
+	}],
+	seams: [examples.seam, {
+		seam: 'payments-3ds-redirect',
+		enclave: 'payments',
+		entry: 'Browser redirect back from the 3-D Secure provider; the callback is authenticated with a signed token tied to the original auth challenge',
+		decision: 'Verify the callback signature and deny unverified callbacks',
+		monitoring: 'Every callback logged and counted; alert on verification failure rate',
+		blastRadius: 'A forged callback could mark a charge as completed',
+		killPath: 'Disable the callback route; pending charges fail closed',
+		lastRehearsed: '2026-09-10',
+		reviewDate: '2026-11-15',
+	}],
+};
+
+function setStatus(text, show) {
+	statusBox.textContent = text;
+	statusBox.style.display = show ? 'block' : 'none';
+}
+
+async function getPolicy(name) {
+	if (policyCache[name]) return policyCache[name];
+	const mod = await import('./vendor/opa-wasm-browser.esm.js');
+	const bytes = await (await fetch(`./wasm/${name}.wasm`)).arrayBuffer();
+	const policy = await mod.default.loadPolicy(bytes);
+	policyCache[name] = policy;
+	return policy;
+}
+
+function selectTab(id) {
+	active = id;
+	for (const t of tabs) {
+		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
+		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
+	}
+	document.getElementById('today-label').style.display = id === 'bundle' ? 'none' : 'block';
+	todayInput.style.display = id === 'bundle' ? 'none' : 'inline-block';
+	if (!editor(id).value.trim()) editor(id).value = JSON.stringify(examples[id], null, 2);
+	results.style.display = 'none';
+}
+
+function parseEditor(id) {
+	const text = editor(id).value;
+	try {
+		return { value: JSON.parse(text) };
+	} catch (err) {
+		return { error: 'Not valid JSON: ' + err.message };
+	}
+}
+
+function render(result) {
+	const errs = result.findings.filter((f) => f.severity === 'error');
+	const warns = result.findings.filter((f) => f.severity === 'warning');
+	const ordered = errs.concat(warns);
+	results.style.display = 'block';
+	if (result.valid) {
+		verdict.className = 'verdict ok';
+		verdict.textContent = warns.length
+			? `VALID — no errors, ${warns.length} warning${warns.length > 1 ? 's' : ''}`
+			: 'VALID — no findings';
+	} else {
+		verdict.className = 'verdict bad';
+		verdict.textContent = `INVALID — ${errs.length} error${errs.length > 1 ? 's' : ''}` +
+			(warns.length ? `, ${warns.length} warning${warns.length > 1 ? 's' : ''}` : '');
+	}
+	findingsBox.replaceChildren();
+	for (const f of ordered) {
+		const div = document.createElement('div');
+		div.className = 'finding';
+		const sev = document.createElement('span');
+		sev.className = 'sev ' + f.severity;
+		sev.textContent = f.severity;
+		const rule = document.createElement('span');
+		rule.className = 'rule';
+		rule.textContent = ' ' + f.rule;
+		const msg = document.createElement('p');
+		msg.className = 'msg';
+		msg.textContent = f.message;
+		const path = document.createElement('div');
+		path.className = 'path';
+		path.textContent = f.path;
+		div.append(sev, rule, msg, path);
+		findingsBox.append(div);
+	}
+}
+
+validateBtn.addEventListener('click', async () => {
+	setStatus('', false);
+	const parsed = parseEditor(active);
+	if (parsed.error) {
+		setStatus(parsed.error, true);
+		return;
+	}
+	let input;
+	if (active === 'bundle') {
+		input = parsed.value;
+	} else {
+		const today = todayInput.value;
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+			setStatus('Pick the date to validate against (YYYY-MM-DD).', true);
+			return;
+		}
+		input = { contract: parsed.value, today };
+	}
+	validateBtn.disabled = true;
+	validateBtn.textContent = 'Checking…';
+	try {
+		const policy = await getPolicy(active);
+		const outcome = policy.evaluate(input);
+		const result = outcome && outcome[0] && outcome[0].result;
+		if (!result || typeof result.valid !== 'boolean') {
+			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
+		} else {
+			render(result);
+		}
+	} catch (err) {
+		setStatus('Could not run the validator: ' + err.message +
+			' — the wasm bundles in wasm/ may be missing. Run `make site` and serve site-build/.', true);
+	} finally {
+		validateBtn.disabled = false;
+		validateBtn.textContent = 'Validate';
+	}
+});
+
+exampleBtn.addEventListener('click', () => {
+	editor(active).value = JSON.stringify(examples[active], null, 2);
+	results.style.display = 'none';
+	setStatus('', false);
+});
+
+for (const t of tabs) {
+	document.getElementById('tab-' + t.id).addEventListener('click', () => selectTab(t.id));
+}
+
+todayInput.value = new Date().toISOString().slice(0, 10);
+selectTab('enclave');
+</script>
+</body>
+</html>
