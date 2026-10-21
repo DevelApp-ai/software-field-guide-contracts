@@ -1,0 +1,11 @@
+# Build outputs
+build/
+site-build/
+
+# Downloaded tools (see README for install instructions)
+opa
+yq
+
+# Package manager scratch
+node_modules/
+package-lock.json

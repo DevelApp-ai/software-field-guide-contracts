@@ -1,0 +1,56 @@
+# Estate bundle — all enclave and seam contracts together, as validated by
+# `make check-bundle` and the playground's Bundle tab.
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+enclaves:
+  - enclave: checkout
+    owner: Checkout team
+    trustedIdentityPlanes:
+      - plane: customer-web
+        provider: opaque-token
+      - plane: internal-services
+        provider: mtls-svid
+    borderInventory:
+      - checkout-web-tier
+    blastRadius:
+      data: Cart contents and customer profile cache
+      statedLimit: Cart rows for one storefront, one hour
+    reviewedOn: 2026-09-15
+
+  - enclave: payments
+    owner: Payments team
+    trustedIdentityPlanes:
+      - plane: internal-services
+        provider: mtls-svid
+    borderInventory:
+      - payments-3ds-redirect
+    blastRadius:
+      data: Charge attempts and masked card references
+      statedLimit: One payment provider account, 24 hours
+    reviewedOn: 2026-09-02
+
+seams:
+  - seam: checkout-web-tier
+    enclave: checkout
+    entry: >-
+      Internet-facing endpoint behind the edge gateway; mTLS terminates at
+      the gateway and requests continue with a forwarded identity token.
+    decision: Default deny at the gateway; each route is an explicit allow.
+    monitoring: >-
+      Gateway access logs, p99 latency metric, alert on 5xx rate.
+    blastRadius: A spoofed session can read one customer's cart
+    killPath: Drop the gateway route; the edge fails closed
+    lastRehearsed: 2026-08-30
+    reviewDate: 2026-12-01
+
+  - seam: payments-3ds-redirect
+    enclave: payments
+    entry: >-
+      Browser redirect back from the 3-D Secure provider; the callback is
+      authenticated with a signed token tied to the original auth challenge.
+    decision: Verify the callback signature and deny unverified callbacks.
+    monitoring: >-
+      Every callback logged and counted; alert on verification failure rate.
+    blastRadius: A forged callback could mark a charge as completed
+    killPath: Disable the callback route; pending charges fail closed
+    lastRehearsed: 2026-09-10
+    reviewDate: 2026-11-15

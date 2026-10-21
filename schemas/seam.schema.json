@@ -1,0 +1,56 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/seam.schema.json",
+	"title": "Seam contract",
+	"description": "Six answers plus a rehearsal date, as defined in The Software Field Guide, chapter 'Segmenting the Estate': entry, decision, monitoring, blast radius, kill path, and when the kill path was last rehearsed.",
+	"type": "object",
+	"required": ["seam", "enclave", "entry", "decision", "monitoring", "blastRadius", "killPath", "lastRehearsed", "reviewDate"],
+	"additionalProperties": true,
+	"properties": {
+		"seam": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Name of the seam. Must appear in the owning enclave's borderInventory."
+		},
+		"enclave": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Name of the enclave that owns this seam."
+		},
+		"entry": {
+			"type": "string",
+			"minLength": 1,
+			"description": "How traffic and identity arrive at the seam. The validator warns when no identity mechanism (auth, mTLS, SVID, token, identity) is named."
+		},
+		"decision": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Who gets in and who is denied. The validator warns when no deny rule is stated."
+		},
+		"monitoring": {
+			"type": "string",
+			"minLength": 1,
+			"description": "How the seam is watched. The validator warns when no observation (log, metric, alert, monitor) is named."
+		},
+		"blastRadius": {
+			"type": "string",
+			"minLength": 1,
+			"description": "What it means, concretely, when this seam fails."
+		},
+		"killPath": {
+			"type": "string",
+			"minLength": 1,
+			"description": "How the seam is shut down."
+		},
+		"lastRehearsed": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the kill path was last rehearsed, YYYY-MM-DD. The validator flags rehearsals older than 180 days and dates in the future."
+		},
+		"reviewDate": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date of the next scheduled review, YYYY-MM-DD. The validator flags review dates already in the past."
+		}
+	}
+}
