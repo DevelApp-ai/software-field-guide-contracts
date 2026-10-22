@@ -1,0 +1,170 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/authz-policy.schema.json",
+	"title": "Authorization policy set",
+	"description": "The authorization audit substrate defined in The Software Field Guide, issue #59: a subject registry, a non-overlapping rule history (versions), the version that answers today, and probes that pin the expected answers. This schema mirrors the shape rules of the Rego validator (policies/authz); the validator additionally enforces the semantic rules a JSON schema cannot — version windows must not overlap, rule ids unique per version, subject ids unique, the current version must exist and be in effect, and every probe's expectation must survive a replay against the current version.",
+	"type": "object",
+	"required": ["name", "currentVersion", "subjects", "versions"],
+	"additionalProperties": true,
+	"properties": {
+		"name": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Name of the policy set."
+		},
+		"currentVersion": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "The version that answers requests today. Explicit, never derived from the clock. Must name a declared version that is in effect on the validation date."
+		},
+		"disabled": {
+			"type": "boolean",
+			"description": "Kill switch. A disabled policy set denies every request by construction (rule policy/disabled-fail-closed)."
+		},
+		"subjects": {
+			"type": "array",
+			"description": "Subject registry: who can appear in a rule. Roles say what a subject is; flags say what state a subject is in.",
+			"items": {
+				"type": "object",
+				"required": ["id"],
+				"additionalProperties": true,
+				"properties": {
+					"id": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Subject id. Must be unique across the registry."
+					},
+					"roles": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 },
+						"description": "What the subject is, e.g. checkout-clerk."
+					},
+					"flags": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 },
+						"description": "What state the subject is in, e.g. mfa-verified, offboarded."
+					}
+				}
+			}
+		},
+		"versions": {
+			"type": "array",
+			"minItems": 1,
+			"description": "Rule history. Version numbers are unique; effective windows must not overlap; the current version carries forward the rules that still hold.",
+			"items": {
+				"type": "object",
+				"required": ["version", "effectiveFrom", "rules"],
+				"additionalProperties": true,
+				"properties": {
+					"version": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Version number. Unique across the set."
+					},
+					"effectiveFrom": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "First day the version is in effect, YYYY-MM-DD."
+					},
+					"effectiveTo": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "Last day the version is in effect, YYYY-MM-DD. Omitted on the newest version means 'in force until superseded'. Must not precede effectiveFrom."
+					},
+					"rules": {
+						"type": "array",
+						"minItems": 1,
+						"description": "The rules in force in this version.",
+						"items": { "$ref": "#/definitions/rule" }
+					}
+				}
+			}
+		},
+		"probes": {
+			"type": "array",
+			"description": "Requests the current version must answer as promised. They make the set self-testing in CI and are the inventory the disabled-state check proves fail-closed with.",
+			"items": {
+				"type": "object",
+				"required": ["id", "subject", "action", "resource", "expect"],
+				"additionalProperties": true,
+				"properties": {
+					"id": { "type": "string", "minLength": 1, "description": "Probe id." },
+					"subject": { "type": "string", "minLength": 1, "description": "Subject id, resolved against the registry." },
+					"action": { "type": "string", "minLength": 1, "description": "Requested action." },
+					"resource": { "type": "string", "minLength": 1, "description": "Requested resource." },
+					"context": {
+						"type": "object",
+						"description": "Request context, e.g. {\"mfa\": true}. Values are scalars (string, number, boolean).",
+						"additionalProperties": { "type": ["string", "number", "boolean"] }
+					},
+					"expect": {
+						"type": "string",
+						"enum": ["allow", "deny"],
+						"description": "The answer the current version must give. The validator replays every probe and flags any mismatch."
+					}
+				}
+			}
+		}
+	},
+	"definitions": {
+		"selector": {
+			"description": "Names exactly one subject criterion: a registry id, a role, or a flag.",
+			"oneOf": [
+				{
+					"type": "object",
+					"required": ["id"],
+					"additionalProperties": false,
+					"properties": { "id": { "type": "string", "minLength": 1 } }
+				},
+				{
+					"type": "object",
+					"required": ["role"],
+					"additionalProperties": false,
+					"properties": { "role": { "type": "string", "minLength": 1 } }
+				},
+				{
+					"type": "object",
+					"required": ["flag"],
+					"additionalProperties": false,
+					"properties": { "flag": { "type": "string", "minLength": 1 } }
+				}
+			]
+		},
+		"rule": {
+			"type": "object",
+			"required": ["id", "effect", "subject", "action", "resource"],
+			"additionalProperties": true,
+			"properties": {
+				"id": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Rule id. Unique within a version; the same id across versions means 'the same rule, still in force'."
+				},
+				"description": { "type": "string", "minLength": 1, "description": "Why the rule exists, in one sentence." },
+				"effect": {
+					"type": "string",
+					"enum": ["allow", "deny"],
+					"description": "What the rule does when every criterion matches. A matching deny beats every matching allow."
+				},
+				"subject": { "$ref": "#/definitions/selector" },
+				"action": {
+					"type": "string",
+					"minLength": 1,
+					"pattern": "^[^*]*\\*?$",
+					"description": "An exact action, or a trailing-* pattern (order.*, or * for any). Wildcards are trailing-only."
+				},
+				"resource": {
+					"type": "string",
+					"minLength": 1,
+					"pattern": "^[^*]*\\*?$",
+					"description": "An exact resource, or a trailing-* pattern (orders-*, or * for any). Wildcards are trailing-only."
+				},
+				"condition": {
+					"type": "object",
+					"description": "Context fields that must all equal the expected values for the rule to match, e.g. {\"mfa\": true}. Equality on scalars only.",
+					"additionalProperties": { "type": ["string", "number", "boolean"] }
+				}
+			}
+		}
+	}
+}

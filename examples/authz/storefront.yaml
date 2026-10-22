@@ -1,0 +1,151 @@
+# Authorization policy set — The Software Field Guide, "Segmenting the
+# Estate" companion tooling (book issue #59).
+#
+# One store's whole authorization history as an audit substrate: a subject
+# registry, three rule versions (who could do what, when), and probes that
+# pin down what the set must answer. The example dates are chosen relative
+# to the CI anchor date 2026-10-20 (see Makefile and .github/workflows/ci.yml).
+name: storefront
+
+# The version that answers requests today. Explicit, never derived from the
+# clock: `make explain-authz` replays requests against exactly this version.
+currentVersion: 3
+
+# Who can appear in a rule. Roles say what a subject is; flags say what
+# state a subject is in (verified, offboarded, frozen...).
+subjects:
+  - id: alice
+    roles: [checkout-admin]
+    flags: [mfa-verified]
+  - id: bob
+    roles: [checkout-clerk]
+    flags: [mfa-verified]
+  - id: carol
+    roles: [checkout-clerk]
+    flags: []
+  - id: dave
+    roles: []
+    flags: [offboarded]
+
+# Rule history. Versions must not overlap; the current version carries
+# forward the rules that still hold, so the same rule id across versions
+# means "the same rule, still in force".
+versions:
+  # v1: clerks read orders, admins read orders.
+  - version: 1
+    effectiveFrom: 2026-01-01
+    effectiveTo: 2026-03-31
+    rules:
+      - id: clerk-read
+        effect: allow
+        description: Clerks can read orders in their storefront
+        subject: {role: checkout-clerk}
+        action: order.read
+        resource: orders-*
+      - id: admin-read
+        effect: allow
+        description: Admins can read orders in their storefront
+        subject: {role: checkout-admin}
+        action: order.read
+        resource: orders-*
+
+  # v2: clerks may also charge, but only with MFA; offboarded subjects
+  # are denied everywhere, explicitly.
+  - version: 2
+    effectiveFrom: 2026-04-01
+    effectiveTo: 2026-08-31
+    rules:
+      - id: clerk-read
+        effect: allow
+        description: Clerks can read orders in their storefront
+        subject: {role: checkout-clerk}
+        action: order.read
+        resource: orders-*
+      - id: admin-read
+        effect: allow
+        description: Admins can read orders in their storefront
+        subject: {role: checkout-admin}
+        action: order.read
+        resource: orders-*
+      - id: clerk-charge-mfa
+        effect: allow
+        description: Clerks can charge orders only with a verified MFA step
+        subject: {role: checkout-clerk}
+        action: order.charge
+        resource: orders-*
+        condition: {mfa: true}
+      - id: offboarded-deny
+        effect: deny
+        description: Offboarded subjects are denied everything, explicitly
+        subject: {flag: offboarded}
+        action: "*"
+        resource: "*"
+
+  # v3 (current): admin access generalized from reading to everything;
+  # everything else carried forward unchanged.
+  - version: 3
+    effectiveFrom: 2026-09-01
+    rules:
+      - id: clerk-read
+        effect: allow
+        description: Clerks can read orders in their storefront
+        subject: {role: checkout-clerk}
+        action: order.read
+        resource: orders-*
+      - id: clerk-charge-mfa
+        effect: allow
+        description: Clerks can charge orders only with a verified MFA step
+        subject: {role: checkout-clerk}
+        action: order.charge
+        resource: orders-*
+        condition: {mfa: true}
+      - id: admin-override
+        effect: allow
+        description: Admins can do anything in their storefront
+        subject: {role: checkout-admin}
+        action: "*"
+        resource: "*"
+      - id: offboarded-deny
+        effect: deny
+        description: Offboarded subjects are denied everything, explicitly
+        subject: {flag: offboarded}
+        action: "*"
+        resource: "*"
+
+# Probes: requests the current version must answer as promised. They make
+# the set self-testing in CI, and they are the inventory the disabled-state
+# check proves fail-closed with.
+probes:
+  - id: clerk-read-ok
+    subject: bob
+    action: order.read
+    resource: orders-1041
+    context: {tenant: acme}
+    expect: allow
+  - id: clerk-charge-without-mfa
+    subject: carol
+    action: order.charge
+    resource: orders-1041
+    context: {mfa: false, tenant: acme}
+    expect: deny
+  - id: clerk-charge-with-mfa
+    subject: bob
+    action: order.charge
+    resource: orders-1041
+    context: {mfa: true, tenant: acme}
+    expect: allow
+  - id: offboarded-read
+    subject: dave
+    action: order.read
+    resource: orders-1041
+    expect: deny
+  - id: admin-override
+    subject: alice
+    action: order.export
+    resource: orders-1041
+    expect: allow
+  - id: clerk-delete-default-deny
+    subject: carol
+    action: order.delete
+    resource: orders-1041
+    expect: deny

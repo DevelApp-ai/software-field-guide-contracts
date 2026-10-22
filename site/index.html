@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -124,6 +124,9 @@
 	}
 	.finding .sev.error { background: #fbecea; color: var(--error); }
 	.finding .sev.warning { background: #fff3d6; color: var(--warning); }
+	.finding .sev.matched { background: #e7f6ec; color: var(--ok); }
+	.finding .sev.neutral { background: #eef0f5; color: var(--muted); }
+	.finding .summary { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; color: var(--ink); margin: 4px 0 2px; }
 	.finding .rule { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; color: var(--muted); }
 	.finding .path { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; color: var(--accent); word-break: break-all; }
 	.finding .msg { margin: 4px 0 2px; }
@@ -149,13 +152,14 @@
 <body>
 <header>
 	<h1>Estate and Seam Contract Validator</h1>
-	<p>Companion to <em>The Software Field Guide</em>, chapter “Segmenting the Estate”. Contracts are checked in your browser by the same Rego policies the CLI runs — nothing is uploaded.</p>
+	<p>Companion to <em>The Software Field Guide</em>, chapter “Segmenting the Estate”. Contracts are checked and requests decided in your browser by the same Rego policies the CLI runs — nothing is uploaded.</p>
 </header>
 <main>
 	<div class="tabs" role="tablist">
 		<button role="tab" id="tab-enclave" aria-selected="true">Enclave contract</button>
 		<button role="tab" id="tab-seam" aria-selected="false">Seam contract</button>
 		<button role="tab" id="tab-bundle" aria-selected="false">Whole estate</button>
+		<button role="tab" id="tab-authz" aria-selected="false">Authz explainer</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -173,6 +177,14 @@
 		<textarea id="editor-bundle" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-authz">
+		<p class="hint">Answer one real 403: a <strong>request</strong> (subject, action, resource, context) decided against an authorization <strong>policy set</strong>. The trace names every rule considered and the criterion each non-firing rule failed on. Try the loaded example — a clerk charging without MFA — or flip <code>mfa</code> to <code>true</code> and watch the decision turn.</p>
+		<label for="editor-authz-request">Request</label>
+		<textarea id="editor-authz-request" spellcheck="false"></textarea>
+		<label for="editor-authz-policyset">Policy set</label>
+		<textarea id="editor-authz-policyset" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -188,7 +200,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalent: <code>make check-enclave FILE=...</code>.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions.</p>
 </footer>
 
 <script type="module">
@@ -196,6 +208,7 @@ const tabs = [
 	{ id: 'enclave', pkg: 'estate.enclave' },
 	{ id: 'seam', pkg: 'estate.seam' },
 	{ id: 'bundle', pkg: 'estate.cross' },
+	{ id: 'authz', pkg: 'authz' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -237,6 +250,48 @@ const examples = {
 		reviewDate: '2026-12-01',
 	},
 	bundle: null, // filled below
+	authzRequest: {
+		subject: 'bob',
+		action: 'order.charge',
+		resource: 'orders-1041',
+		context: { mfa: false, tenant: 'acme' },
+	},
+	authzPolicySet: {
+		name: 'storefront',
+		currentVersion: 2,
+		subjects: [
+			{ id: 'alice', roles: ['checkout-admin'], flags: ['mfa-verified'] },
+			{ id: 'bob', roles: ['checkout-clerk'], flags: ['mfa-verified'] },
+			{ id: 'carol', roles: ['checkout-clerk'], flags: [] },
+			{ id: 'dave', roles: [], flags: ['offboarded'] },
+		],
+		versions: [
+			{
+				version: 1,
+				effectiveFrom: '2026-01-01',
+				effectiveTo: '2026-08-31',
+				rules: [
+					{ id: 'clerk-read', effect: 'allow', description: 'Clerks can read orders in their storefront', subject: { role: 'checkout-clerk' }, action: 'order.read', resource: 'orders-*' },
+					{ id: 'admin-read', effect: 'allow', description: 'Admins can read orders in their storefront', subject: { role: 'checkout-admin' }, action: 'order.read', resource: 'orders-*' },
+				],
+			},
+			{
+				version: 2,
+				effectiveFrom: '2026-09-01',
+				rules: [
+					{ id: 'clerk-read', effect: 'allow', description: 'Clerks can read orders in their storefront', subject: { role: 'checkout-clerk' }, action: 'order.read', resource: 'orders-*' },
+					{ id: 'clerk-charge-mfa', effect: 'allow', description: 'Clerks can charge orders only with a verified MFA step', subject: { role: 'checkout-clerk' }, action: 'order.charge', resource: 'orders-*', condition: { mfa: true } },
+					{ id: 'admin-override', effect: 'allow', description: 'Admins can do anything in their storefront', subject: { role: 'checkout-admin' }, action: '*', resource: '*' },
+					{ id: 'offboarded-deny', effect: 'deny', description: 'Offboarded subjects are denied everything, explicitly', subject: { flag: 'offboarded' }, action: '*', resource: '*' },
+				],
+			},
+		],
+		probes: [
+			{ id: 'clerk-charge-without-mfa', subject: 'carol', action: 'order.charge', resource: 'orders-1041', context: { mfa: false }, expect: 'deny' },
+			{ id: 'clerk-charge-with-mfa', subject: 'bob', action: 'order.charge', resource: 'orders-1041', context: { mfa: true }, expect: 'allow' },
+			{ id: 'admin-override', subject: 'alice', action: 'order.export', resource: 'orders-1041', expect: 'allow' },
+		],
+	},
 };
 examples.bundle = {
 	enclaves: [examples.enclave, {
@@ -283,9 +338,19 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	document.getElementById('today-label').style.display = id === 'bundle' ? 'none' : 'block';
-	todayInput.style.display = id === 'bundle' ? 'none' : 'inline-block';
-	if (!editor(id).value.trim()) editor(id).value = JSON.stringify(examples[id], null, 2);
+	const needsToday = id !== 'bundle' && id !== 'authz';
+	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
+	todayInput.style.display = needsToday ? 'inline-block' : 'none';
+	if (id === 'authz') {
+		for (const [el, value] of [
+			[editor('authz-request'), examples.authzRequest],
+			[editor('authz-policyset'), examples.authzPolicySet],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (!editor(id).value.trim()) {
+		editor(id).value = JSON.stringify(examples[id], null, 2);
+	}
 	results.style.display = 'none';
 }
 
@@ -334,23 +399,76 @@ function render(result) {
 	}
 }
 
+function traceChip(step) {
+	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
+	if (step.outcome) return { cls: 'neutral', text: step.outcome };
+	if (step.kind === 'decision') return { cls: step.decision === 'allow' ? 'matched' : 'error', text: step.decision };
+	return { cls: 'neutral', text: step.kind };
+}
+
+function renderAuthz(result) {
+	results.style.display = 'block';
+	verdict.className = 'verdict ' + (result.decision === 'allow' ? 'ok' : 'bad');
+	verdict.textContent = (result.decision === 'allow' ? 'ALLOW' : 'DENY') + ' — decided by ' + result.rule;
+	findingsBox.replaceChildren();
+	for (const step of result.trace) {
+		const div = document.createElement('div');
+		div.className = 'finding';
+		const chip = document.createElement('span');
+		const c = traceChip(step);
+		chip.className = 'sev ' + c.cls;
+		chip.textContent = c.text;
+		const label = document.createElement('span');
+		label.className = 'rule';
+		label.textContent = ' step ' + step.step + (step.rule ? ' — ' + step.rule : '');
+		div.append(chip, label);
+		if (step.summary) {
+			const s = document.createElement('p');
+			s.className = 'summary';
+			s.textContent = step.summary + (step.version != null ? '  (version ' + step.version + ')' : '');
+			div.append(s);
+		}
+		if (step.because) {
+			const m = document.createElement('p');
+			m.className = 'msg';
+			m.textContent = step.because;
+			div.append(m);
+		}
+		findingsBox.append(div);
+	}
+}
+
 validateBtn.addEventListener('click', async () => {
 	setStatus('', false);
-	const parsed = parseEditor(active);
-	if (parsed.error) {
-		setStatus(parsed.error, true);
-		return;
-	}
 	let input;
-	if (active === 'bundle') {
-		input = parsed.value;
-	} else {
-		const today = todayInput.value;
-		if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
-			setStatus('Pick the date to validate against (YYYY-MM-DD).', true);
+	if (active === 'authz') {
+		const req = parseEditor('authz-request');
+		const ps = parseEditor('authz-policyset');
+		if (req.error) {
+			setStatus('Request: ' + req.error, true);
 			return;
 		}
-		input = { contract: parsed.value, today };
+		if (ps.error) {
+			setStatus('Policy set: ' + ps.error, true);
+			return;
+		}
+		input = { request: req.value, policySet: ps.value };
+	} else {
+		const parsed = parseEditor(active);
+		if (parsed.error) {
+			setStatus(parsed.error, true);
+			return;
+		}
+		if (active === 'bundle') {
+			input = parsed.value;
+		} else {
+			const today = todayInput.value;
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+				setStatus('Pick the date to validate against (YYYY-MM-DD).', true);
+				return;
+			}
+			input = { contract: parsed.value, today };
+		}
 	}
 	validateBtn.disabled = true;
 	validateBtn.textContent = 'Checking…';
@@ -358,7 +476,13 @@ validateBtn.addEventListener('click', async () => {
 		const policy = await getPolicy(active);
 		const outcome = policy.evaluate(input);
 		const result = outcome && outcome[0] && outcome[0].result;
-		if (!result || typeof result.valid !== 'boolean') {
+		if (active === 'authz') {
+			if (!result || typeof result.decision !== 'string' || !Array.isArray(result.trace)) {
+				setStatus('The explainer returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderAuthz(result);
+			}
+		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
 			render(result);
@@ -373,7 +497,12 @@ validateBtn.addEventListener('click', async () => {
 });
 
 exampleBtn.addEventListener('click', () => {
-	editor(active).value = JSON.stringify(examples[active], null, 2);
+	if (active === 'authz') {
+		editor('authz-request').value = JSON.stringify(examples.authzRequest, null, 2);
+		editor('authz-policyset').value = JSON.stringify(examples.authzPolicySet, null, 2);
+	} else {
+		editor(active).value = JSON.stringify(examples[active], null, 2);
+	}
 	results.style.display = 'none';
 	setStatus('', false);
 });
