@@ -90,9 +90,56 @@ const validBundle = {
 	],
 }
 
+// A compact authorization policy set for the authz bundle. Semantics
+// mirror the unit-test fixture: clerk read allow, clerk charge with
+// MFA condition, admin wildcard allow, offboarded deny.
+const authzPolicySet = {
+	name: 'storefront',
+	currentVersion: 2,
+	subjects: [
+		{ id: 'alice', roles: ['admin'], flags: ['mfa-verified'] },
+		{ id: 'bob', roles: ['clerk'], flags: [] },
+		{ id: 'carol', roles: [], flags: ['offboarded'] },
+	],
+	versions: [
+		{
+			version: 1,
+			effectiveFrom: '2026-01-01',
+			effectiveTo: '2026-06-30',
+			rules: [
+				{ id: 'clerk-read-v1', effect: 'allow', subject: { role: 'clerk' }, action: 'order.read', resource: 'orders-*' },
+			],
+		},
+		{
+			version: 2,
+			effectiveFrom: '2026-07-01',
+			rules: [
+				{ id: 'clerk-read', effect: 'allow', subject: { role: 'clerk' }, action: 'order.read', resource: 'orders-*' },
+				{ id: 'clerk-charge-mfa', effect: 'allow', subject: { role: 'clerk' }, action: 'order.charge', resource: 'orders-*', condition: { mfa: true } },
+				{ id: 'admin-override', effect: 'allow', subject: { role: 'admin' }, action: '*', resource: '*' },
+				{ id: 'offboarded-deny', effect: 'deny', subject: { flag: 'offboarded' }, action: '*', resource: '*' },
+			],
+		},
+	],
+	probes: [
+		{ id: 'clerk-read-ok', subject: 'bob', action: 'order.read', resource: 'orders-1041', context: {}, expect: 'allow' },
+		{ id: 'clerk-charge-no-mfa', subject: 'bob', action: 'order.charge', resource: 'orders-1041', context: { mfa: false }, expect: 'deny' },
+		{ id: 'offboarded-read', subject: 'carol', action: 'order.read', resource: 'orders-1041', expect: 'deny' },
+		{ id: 'admin-anything', subject: 'alice', action: 'order.export', resource: 'orders-1041', expect: 'allow' },
+	],
+}
+
+const authzRequest = (subject, action, resource, context = {}) => ({
+	subject,
+	action,
+	resource,
+	context,
+})
+
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
 const crossPolicy = await load('cross')
+const authzPolicy = await load('authz')
 
 // --- enclave -------------------------------------------------------------
 
@@ -148,5 +195,56 @@ assert(hasFinding(r, 'bundle/border-seam-without-contract'), 'uncovered border s
 r = crossPolicy.evaluate({ enclaves: [validEnclave, validEnclave], seams: validBundle.seams })[0].result
 const dupes = r.findings.filter((f) => f.rule === 'bundle/duplicate-enclave-name')
 assert(dupes.length === 1, 'duplicate enclave name reported exactly once in wasm')
+
+// --- authz ----------------------------------------------------------------
+
+const decide = (request, policySet) =>
+	authzPolicy.evaluate({ request, policySet })[0].result
+
+let d = decide(authzRequest('bob', 'order.read', 'orders-1041'), authzPolicySet)
+assert(d.decision === 'allow' && d.rule === 'clerk-read', 'clerk read allowed in wasm')
+
+d = decide(authzRequest('bob', 'order.charge', 'orders-1041', { mfa: false }), authzPolicySet)
+assert(
+	d.decision === 'deny' && d.rule === 'policy/default-deny',
+	'MFA condition not met falls through to default deny in wasm',
+)
+const mfaStep = d.trace.find((s) => s.rule === 'clerk-charge-mfa')
+assert(
+	mfaStep && mfaStep.outcome === 'not-matched' && mfaStep.because.includes('context.mfa=true'),
+	'the trace names the unmet condition in wasm',
+)
+
+const denyBobSet = {
+	...authzPolicySet,
+	versions: authzPolicySet.versions.map((v) =>
+		v.version === 2
+			? {
+					...v,
+					rules: [
+						...v.rules,
+						{ id: 'bob-frozen', effect: 'deny', subject: { id: 'bob' }, action: '*', resource: '*' },
+					],
+			  }
+			: v,
+	),
+}
+d = decide(authzRequest('bob', 'order.read', 'orders-1041'), denyBobSet)
+assert(
+	d.decision === 'deny' && d.rule === 'bob-frozen',
+	'explicit deny beats a matching allow in wasm',
+)
+
+d = decide(authzRequest('ghost', 'order.read', 'orders-1041'), authzPolicySet)
+assert(
+	d.decision === 'deny' && d.rule === 'policy/default-deny' && d.trace.length > 0,
+	'unknown subject fails closed with a trace in wasm',
+)
+
+d = decide(authzRequest('bob', 'order.read', 'orders-1041'), { ...authzPolicySet, disabled: true })
+assert(
+	d.decision === 'deny' && d.rule === 'policy/disabled-fail-closed',
+	'disabled policy set fails closed in wasm',
+)
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
