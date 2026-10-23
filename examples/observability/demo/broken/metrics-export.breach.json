@@ -1,0 +1,10 @@
+{
+  "observations": [
+    {"metric": "storefront_requests_total", "label": "method", "distinct": 2},
+    {"metric": "storefront_requests_total", "label": "route", "distinct": 2},
+    {"metric": "storefront_requests_total", "label": "status", "distinct": 37},
+    {"metric": "storefront_requests_total", "label": "order_id", "distinct": 1204},
+    {"metric": "payment_settlements_total", "label": "result", "distinct": 2},
+    {"metric": "payment_settlements_total", "label": "provider", "distinct": 3}
+  ]
+}

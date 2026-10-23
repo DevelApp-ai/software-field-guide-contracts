@@ -1,0 +1,18 @@
+# The event-name vocabulary — The Software Field Guide, "observability-engineering".
+#
+# The structured-log vocabulary of the storefront demo: which event
+# names exist is a queryable fact, versioned like code. Anything that is
+# not a dimension belongs in a log event, not a label — note that the
+# payloads below happily carry order ids; the vocabulary only governs
+# names.
+version: 1
+reviewedOn: 2026-10-01
+events:
+  - name: order.placed
+    description: An order was accepted and awaits settlement
+  - name: order.cancelled
+    description: A customer cancelled an open order
+  - name: payment.settled
+    description: A charge was captured by the payment provider
+  - name: payment.refunded
+    description: A settled charge was fully or partially refunded
