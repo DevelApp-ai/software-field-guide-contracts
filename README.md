@@ -4,6 +4,8 @@ Contract validators for **The Software Field Guide** (DevelApp-ai/software-field
 
 It also implements the **authorization policy compiler** from [book issue #59](https://github.com/DevelApp-ai/software-field-guide/issues/59): one versioned policy set answers who can do what, explains every 403 with a named trace, proves the kill switch fails closed, and doubles as a retrospective audit substrate.
 
+And it implements the **observability vocabulary and cardinality linter** from [book issue #61](https://github.com/DevelApp-ai/software-field-guide/issues/61): telemetry names and labels are versioned contracts, a scanner lints instrumentation code against them, and a cardinality gate catches the label that breeds a metrics budget breach — citing the budget file it breaches.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -15,10 +17,14 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `authz/decide` | one request against the set | `{"request": {...}, "policySet": {...}}` |
 | `authz/who_could_access` | who could touch a resource in a window | `{"resource": "...", "window": {"from": "...", "to": "..."}, "policySet": {...}}` |
 | `authz/disabled_check` | the set with `disabled: true` overlaid | `{"policySet": {...}}` |
+| `obs/validate` | the three observability contracts together | `{"vocabulary": {...}, "labels": {...}, "budget": {...}, "today": "YYYY-MM-DD"}` |
+| `obs/lint` | an instrumentation scan against both vocabularies | `{"vocabulary": {...}, "labels": {...}, "scan": {...}}` |
+| `obs/gate` | a metrics export against the cardinality budget | `{"labels": {...}, "budget": {...}, "observations": [...], "budgetFile": "..."}` |
+| `obs/audit` | all three at once — one verdict, one findings list | the superset of the above (plus `"today"`) |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.2** — the estate/seam formats and the authorization compiler work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.3** — the estate/seam formats, the authorization compiler, and the observability linter work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -138,6 +144,68 @@ make authz-disabled FILE=examples/authz/storefront.yaml
 make who-could-access FILE=examples/authz/storefront.yaml RESOURCE=orders-1041 FROM=2026-01-01 TO=2026-12-31
 ```
 
+## The observability linter
+
+Where the authorization compiler judges decisions, the observability linter judges *telemetry shape*: which event names exist, which labels a metric may carry, and how many distinct values each label may take — all three written down as versioned contracts before the cardinality bill arrives.
+
+### Three contracts, one vocabulary of telemetry
+
+```yaml
+# vocabulary.yaml — event names are a versioned fact, not folklore
+version: 1
+reviewedOn: 2026-10-01
+events:
+  - {name: order.placed, description: An order was accepted and awaits settlement}
+
+# label-schema.yaml — a metric's labels are declared, reviewed, and bounded
+version: 1
+reviewedOn: 2026-10-01
+metrics:
+  - name: storefront_requests_total
+    description: Storefront HTTP requests
+    labels: [method, route, status]
+
+# cardinality-budget.yaml — per-label allocations and a per-metric total
+owner: Storefront team
+reviewedOn: 2026-10-01
+metrics:
+  - name: storefront_requests_total
+    total: 4000
+    allocations:
+      - {label: method, maxValues: 2}
+      - {label: route, maxValues: 2}
+      - {label: status, maxValues: 100}
+```
+
+See [examples/observability/](examples/observability/) for complete examples and [schemas/](schemas/) for the three JSON Schema drafts. Note what is where: high-cardinality facts (order ids) ride in event payloads, never in labels — the vocabulary governs names, the schema governs labels.
+
+### What the linter enforces and proves
+
+- **Loud validation of the contracts** (`obs/validate`): missing fields, unversioned documents, stale review stamps, duplicate names, budget metrics the label schema doesn’t declare, allocations for labels the schema doesn’t declare, and a static check that the product of allocation maxima stays under the metric’s total.
+- **Instrumentation linting at PR time** (`obs/lint`): [scan/scan_instrumentation.py](scan/scan_instrumentation.py) extracts every `telemetry.event(...)` and `telemetry.metric(...)` call from source (file, line, kind, name, labels) and the policies flag every undeclared event name, undeclared metric, and undeclared label — citing the file and line that introduced it.
+- **The cardinality gate** (`obs/gate`): a metrics export (observed distinct values per metric+label) is judged against the budget three ways — a label observed past its allocation, a label observed with no allocation at all, and the honest product of observed distinct values past the metric total. Every budget finding cites the budget file it breaches.
+- **One audit** (`obs/audit`): the composed entrypoint for CI and the playground — contracts validated, scan linted, export gated, one verdict, the per-metric cardinalities alongside.
+
+The done-when proof from book issue #61 — a budget-breeding label caught with the budget file cited — runs as a single target:
+
+```sh
+make obs-demo
+# → 1. the three contracts validate
+#   2. the demo instrumentation lints clean
+#   3. the demo export passes the cardinality gate
+#   4. an undeclared label in code is caught at PR time:
+#      lint/label-undeclared — "label 'order_id' on metric
+#      'storefront_requests_total' emitted at storefront.undeclared.py:11
+#      is not in the metric's label schema (method, route, status)"
+#   5. an over-budget label breaches the gate, budget file cited:
+#      budget/label-over-allocation — "label 'order_id' … shows 1204
+#      distinct values in the metrics export; the cardinality budget
+#      allocates 50 (cardinality-budget.with-order-id.yaml)"
+#      budget/metric-total-exceeded — "metric 'storefront_requests_total'
+#      multiplies observed distinct values to 178192 label combinations;
+#      the cardinality budget total is 4000 (cardinality-budget.with-order-id.yaml)"
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -147,9 +215,12 @@ make check-enclave FILE=examples/enclaves/checkout.yaml TODAY=2026-10-20
 make check-seam    FILE=examples/seams/checkout-web-tier.yaml
 make check-bundle  FILE=examples/bundle.yaml
 make check-authz   FILE=examples/authz/storefront.yaml TODAY=2026-10-20
+make check-obs     TODAY=2026-10-20          # vocabulary + label schema + budget
+make obs-lint                               # scan demo sources against the contracts
+make obs-gate                               # gate the demo metrics export
 ```
 
-`TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. To validate an estate split across directories, paste the JSON form directly:
+`TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
 
 ```sh
 opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
@@ -157,7 +228,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -168,14 +239,17 @@ The playground imports the opa-wasm runtime from [site/vendor/](site/vendor/) �
 
 ```
 policies/estate/    enclave.rego, seam.rego, cross.rego, lib.rego
-policies/authz/    lib, model, policy, decide, retro, disabled
-policies/tests/    Rego unit tests with embedded fixtures (estate + authz)
-schemas/           JSON Schema (draft-07) for both contract formats + the policy set
-examples/          valid YAML contracts, a bundle example, and an authz policy set
-site/              single-page playground (plus vendored opa-wasm)
-test/e2e.mjs       node smoke test: wasm builds + vendored browser bundle
-Makefile           check/test/build/site/e2e/check-*/explain-authz/... targets
-.github/workflows/ CI: fmt, check, tests, examples, wasm build, e2e, Pages deploy
+policies/authz/     lib, model, policy, decide, retro, disabled
+policies/obs/       lib, model, policy, lint, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs)
+schemas/            JSON Schema (draft-07) for every contract format + the policy set
+examples/           valid YAML contracts, a bundle, an authz policy set,
+                    and the observability demo (contracts + instrumented sources)
+scan/               instrumentation scanner feeding the obs linter
+site/               single-page playground (plus vendored opa-wasm)
+test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -185,7 +259,8 @@ Makefile           check/test/build/site/e2e/check-*/explain-authz/... targets
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the four `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the five `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 
 ## License
 

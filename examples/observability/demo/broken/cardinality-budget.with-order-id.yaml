@@ -1,0 +1,20 @@
+# The updated budget: the same PR allocated a token 50 values for
+# order_id and left the total alone. The export shows 1204 distinct
+# order ids — the allocation is breached and the product of observed
+# distinct values blows past the metric's total. This is the budget
+# file the demo CI run cites.
+owner: Storefront team
+reviewedOn: 2026-10-18
+metrics:
+  - name: storefront_requests_total
+    total: 4000
+    allocations:
+      - {label: method, maxValues: 2}
+      - {label: route, maxValues: 2}
+      - {label: status, maxValues: 100}
+      - {label: order_id, maxValues: 50}
+  - name: payment_settlements_total
+    total: 200
+    allocations:
+      - {label: result, maxValues: 2}
+      - {label: provider, maxValues: 10}

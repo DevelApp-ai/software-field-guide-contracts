@@ -1,0 +1,15 @@
+# The updated label schema: someone declared order_id as a label.
+#
+# This is the quiet half of the regression — the schema edit looks
+# legitimate in isolation (the PR even updates the contract!), but the
+# cardinality budget was never consulted. The gate catches it from the
+# metrics export.
+version: 2
+reviewedOn: 2026-10-18
+metrics:
+  - name: storefront_requests_total
+    description: Storefront HTTP requests by method, route template, and status class
+    labels: [method, route, status, order_id]
+  - name: payment_settlements_total
+    description: Settlement outcomes by result and provider
+    labels: [result, provider]

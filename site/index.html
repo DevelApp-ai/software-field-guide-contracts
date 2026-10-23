@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -160,6 +160,7 @@
 		<button role="tab" id="tab-seam" aria-selected="false">Seam contract</button>
 		<button role="tab" id="tab-bundle" aria-selected="false">Whole estate</button>
 		<button role="tab" id="tab-authz" aria-selected="false">Authz explainer</button>
+		<button role="tab" id="tab-obs" aria-selected="false">Obs linter</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -185,6 +186,14 @@
 		<textarea id="editor-authz-policyset" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-obs">
+		<p class="hint">Lint instrumentation against three contracts — an event-name <strong>vocabulary</strong>, a metric <strong>label schema</strong>, and a <strong>cardinality budget</strong> — then gate a metrics export against the budget. The left editor holds the three documents; the right one holds the instrumentation scan and the observed label cardinalities. Budget findings cite the budget file they breach. Try the loaded example, then add <code>{"metric": "storefront_requests_total", "label": "order_id", "distinct": 1204}</code> to the observations and watch the budget break.</p>
+		<label for="editor-obs-contracts">Contracts (vocabulary, label schema, cardinality budget)</label>
+		<textarea id="editor-obs-contracts" spellcheck="false"></textarea>
+		<label for="editor-obs-runtime">Scan and metrics export</label>
+		<textarea id="editor-obs-runtime" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -200,7 +209,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -209,6 +218,7 @@ const tabs = [
 	{ id: 'seam', pkg: 'estate.seam' },
 	{ id: 'bundle', pkg: 'estate.cross' },
 	{ id: 'authz', pkg: 'authz' },
+	{ id: 'obs', pkg: 'obs' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -292,6 +302,66 @@ const examples = {
 			{ id: 'admin-override', subject: 'alice', action: 'order.export', resource: 'orders-1041', expect: 'allow' },
 		],
 	},
+	obsContracts: {
+		vocabulary: {
+			version: 1,
+			reviewedOn: '2026-10-01',
+			events: [
+				{ name: 'order.placed', description: 'An order was accepted and awaits settlement' },
+				{ name: 'order.cancelled', description: 'A customer cancelled an open order' },
+				{ name: 'payment.settled', description: 'A charge was captured by the payment provider' },
+				{ name: 'payment.refunded', description: 'A settled charge was fully or partially refunded' },
+			],
+		},
+		labels: {
+			version: 1,
+			reviewedOn: '2026-10-01',
+			metrics: [
+				{ name: 'storefront_requests_total', description: 'Storefront HTTP requests', labels: ['method', 'route', 'status'] },
+				{ name: 'payment_settlements_total', description: 'Settlement outcomes', labels: ['result', 'provider'] },
+			],
+		},
+		budget: {
+			owner: 'Storefront team',
+			reviewedOn: '2026-10-01',
+			metrics: [
+				{
+					name: 'storefront_requests_total',
+					total: 4000,
+					allocations: [
+						{ label: 'method', maxValues: 2 },
+						{ label: 'route', maxValues: 2 },
+						{ label: 'status', maxValues: 100 },
+					],
+				},
+				{
+					name: 'payment_settlements_total',
+					total: 200,
+					allocations: [
+						{ label: 'result', maxValues: 2 },
+						{ label: 'provider', maxValues: 10 },
+					],
+				},
+			],
+		},
+	},
+	obsRuntime: {
+		scan: {
+			calls: [
+				{ file: 'src/storefront.py', line: 10, kind: 'event', name: 'order.placed', labels: [] },
+				{ file: 'src/storefront.py', line: 11, kind: 'metric', name: 'storefront_requests_total', labels: ['method', 'route', 'status'] },
+				{ file: 'src/payments.py', line: 5, kind: 'event', name: 'payment.settled', labels: [] },
+				{ file: 'src/payments.py', line: 6, kind: 'metric', name: 'payment_settlements_total', labels: ['result', 'provider'] },
+			],
+		},
+		observations: [
+			{ metric: 'storefront_requests_total', label: 'method', distinct: 2 },
+			{ metric: 'storefront_requests_total', label: 'route', distinct: 2 },
+			{ metric: 'storefront_requests_total', label: 'status', distinct: 37 },
+			{ metric: 'payment_settlements_total', label: 'result', distinct: 2 },
+			{ metric: 'payment_settlements_total', label: 'provider', distinct: 3 },
+		],
+	},
 };
 examples.bundle = {
 	enclaves: [examples.enclave, {
@@ -338,13 +408,20 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
 		for (const [el, value] of [
 			[editor('authz-request'), examples.authzRequest],
 			[editor('authz-policyset'), examples.authzPolicySet],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'obs') {
+		for (const [el, value] of [
+			[editor('obs-contracts'), examples.obsContracts],
+			[editor('obs-runtime'), examples.obsRuntime],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -399,6 +476,31 @@ function render(result) {
 	}
 }
 
+function renderObs(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'cardinality';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' observed label cardinalities, per metric';
+	const head = document.createElement('p');
+	head.className = 'summary';
+	head.textContent = 'product of observed distinct values per label';
+	card.append(chip, title, head);
+	for (const m of result.cardinalities) {
+		const row = document.createElement('p');
+		row.className = 'summary';
+		row.textContent = m.metric + '  ' +
+			m.labels.map((l) => `${l.label}×${l.distinct}`).join(' · ') +
+			`  = ${m.product} combinations`;
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -441,7 +543,19 @@ function renderAuthz(result) {
 validateBtn.addEventListener('click', async () => {
 	setStatus('', false);
 	let input;
-	if (active === 'authz') {
+	if (active === 'obs') {
+		const contracts = parseEditor('obs-contracts');
+		const runtime = parseEditor('obs-runtime');
+		if (contracts.error) {
+			setStatus('Contracts: ' + contracts.error, true);
+			return;
+		}
+		if (runtime.error) {
+			setStatus('Scan and export: ' + runtime.error, true);
+			return;
+		}
+		input = { ...contracts.value, ...runtime.value, today: '2026-10-20', budgetFile: 'cardinality-budget.yaml' };
+	} else if (active === 'authz') {
 		const req = parseEditor('authz-request');
 		const ps = parseEditor('authz-policyset');
 		if (req.error) {
@@ -482,6 +596,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderAuthz(result);
 			}
+		} else if (active === 'obs') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cardinalities)) {
+				setStatus('The linter returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderObs(result);
+			}
 		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
@@ -500,6 +620,9 @@ exampleBtn.addEventListener('click', () => {
 	if (active === 'authz') {
 		editor('authz-request').value = JSON.stringify(examples.authzRequest, null, 2);
 		editor('authz-policyset').value = JSON.stringify(examples.authzPolicySet, null, 2);
+	} else if (active === 'obs') {
+		editor('obs-contracts').value = JSON.stringify(examples.obsContracts, null, 2);
+		editor('obs-runtime').value = JSON.stringify(examples.obsRuntime, null, 2);
 	} else {
 		editor(active).value = JSON.stringify(examples[active], null, 2);
 	}

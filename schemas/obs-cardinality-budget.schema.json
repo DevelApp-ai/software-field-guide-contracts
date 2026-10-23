@@ -1,0 +1,64 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/obs-cardinality-budget.schema.json",
+	"title": "Cardinality budget",
+	"description": "The cardinality budget defined in The Software Field Guide, \"observability-engineering\": cardinality is a budget with an owner and a review cadence — a pull request that adds an unbounded label to a metric is a review comment, not a discovery in a 3 a.m. page. Per metric: a ceiling on label combinations (total) and an allocation per label (maxValues). This schema mirrors the shape rules of the Rego validator (policies/obs); the validator additionally enforces the semantic rules a JSON schema cannot — the review date must be fresh, metric names and labels unique, budget metrics must exist in the label schema, every allocated label must be declared there, every declared label must be allocated, and the allocations must not multiply past the metric's own total.",
+	"type": "object",
+	"required": ["owner", "reviewedOn", "metrics"],
+	"additionalProperties": true,
+	"properties": {
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the budget and answers for its review cadence."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "The date of the last budget review, YYYY-MM-DD. Must name a real calendar date, not lie in the future, and be at most 365 days before the validation date."
+		},
+		"metrics": {
+			"type": "array",
+			"minItems": 1,
+			"description": "Per-metric cardinality allocations. High-cardinality facts (user_id, request_id, order_id) belong in log events and traces, never in labels — if a label's values are effectively unbounded, do not allocate for it; delete it.",
+			"items": {
+				"type": "object",
+				"required": ["name", "total", "allocations"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The metric the budget covers. Must be declared in the label schema; must be unique within the budget."
+					},
+					"total": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "The ceiling on the metric's label combinations."
+					},
+					"allocations": {
+						"type": "array",
+						"description": "The per-label allocations. An empty array is valid for an unlabeled metric.",
+						"items": {
+							"type": "object",
+							"required": ["label", "maxValues"],
+							"additionalProperties": true,
+							"properties": {
+								"label": {
+									"type": "string",
+									"minLength": 1,
+									"description": "The label being allocated. Must be declared in the metric's label set; must be unique within the metric's allocations."
+								},
+								"maxValues": {
+									"type": "integer",
+									"minimum": 1,
+									"description": "How many distinct values the label may carry. The metrics export is checked against this allocation: more distinct observed values than maxValues fails the gate (rule budget/label-over-allocation), citing this allocation."
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

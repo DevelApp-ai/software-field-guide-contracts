@@ -1,0 +1,15 @@
+# The metric label schema — The Software Field Guide, "observability-engineering".
+#
+# The label set is a contract: two teams emitting the same metric with
+# different label sets produce unjoinable numbers. Every metric declares
+# its label set explicitly — an empty array is a valid contract, an
+# undeclared one is not.
+version: 1
+reviewedOn: 2026-10-01
+metrics:
+  - name: storefront_requests_total
+    description: Storefront HTTP requests by method, route template, and status class
+    labels: [method, route, status]
+  - name: payment_settlements_total
+    description: Settlement outcomes by result and provider
+    labels: [result, provider]

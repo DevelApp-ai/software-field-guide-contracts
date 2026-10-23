@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the three policy.wasm builds and evaluates
+// End-to-end smoke test: loads the five policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -136,6 +136,88 @@ const authzRequest = (subject, action, resource, context = {}) => ({
 	context,
 })
 
+// --- observability contracts (mirror the unit-test fixture) ------------------
+
+const obsVocabulary = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	events: [
+		{ name: 'order.placed', description: 'An order was accepted and awaits settlement' },
+		{ name: 'order.cancelled', description: 'A customer cancelled an open order' },
+		{ name: 'payment.settled', description: 'A charge was captured by the payment provider' },
+	],
+}
+
+const obsLabelSchema = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	metrics: [
+		{ name: 'storefront_requests_total', description: 'Storefront HTTP requests', labels: ['method', 'route', 'status'] },
+		{ name: 'payment_settlements_total', description: 'Settlement outcomes', labels: ['result', 'provider'] },
+	],
+}
+
+const obsBudget = {
+	owner: 'Storefront team',
+	reviewedOn: '2026-10-01',
+	metrics: [
+		{
+			name: 'storefront_requests_total',
+			total: 4000,
+			allocations: [
+				{ label: 'method', maxValues: 2 },
+				{ label: 'route', maxValues: 2 },
+				{ label: 'status', maxValues: 100 },
+			],
+		},
+		{
+			name: 'payment_settlements_total',
+			total: 200,
+			allocations: [
+				{ label: 'result', maxValues: 2 },
+				{ label: 'provider', maxValues: 10 },
+			],
+		},
+	],
+}
+
+const obsBudgetWithOrderId = {
+	...obsBudget,
+	metrics: [
+		{
+			...obsBudget.metrics[0],
+			allocations: [...obsBudget.metrics[0].allocations, { label: 'order_id', maxValues: 50 }],
+		},
+		obsBudget.metrics[1],
+	],
+}
+
+const obsLabelSchemaWithOrderId = {
+	version: 2,
+	reviewedOn: '2026-10-18',
+	metrics: [
+		{ name: 'storefront_requests_total', description: 'Storefront HTTP requests', labels: ['method', 'route', 'status', 'order_id'] },
+		obsLabelSchema.metrics[1],
+	],
+}
+
+const obsScanCall = (kind, name, labels = []) => ({ file: 'src/storefront.py', line: 6, kind, name, labels })
+
+const obsObservations = [
+	{ metric: 'storefront_requests_total', label: 'method', distinct: 2 },
+	{ metric: 'storefront_requests_total', label: 'route', distinct: 2 },
+	{ metric: 'storefront_requests_total', label: 'status', distinct: 37 },
+	{ metric: 'payment_settlements_total', label: 'result', distinct: 2 },
+	{ metric: 'payment_settlements_total', label: 'provider', distinct: 3 },
+]
+
+const obsBreachObservations = [
+	...obsObservations,
+	{ metric: 'storefront_requests_total', label: 'order_id', distinct: 1204 },
+]
+
+const obsPolicy = await load('obs')
+
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
 const crossPolicy = await load('cross')
@@ -246,5 +328,50 @@ assert(
 	d.decision === 'deny' && d.rule === 'policy/disabled-fail-closed',
 	'disabled policy set fails closed in wasm',
 )
+
+// --- obs -------------------------------------------------------------------
+
+const audit = (extra) => obsPolicy.evaluate({
+	vocabulary: obsVocabulary,
+	labels: obsLabelSchema,
+	budget: obsBudget,
+	today,
+	scan: {
+		calls: [
+			obsScanCall('event', 'order.placed'),
+			obsScanCall('metric', 'storefront_requests_total', ['method', 'route', 'status']),
+			obsScanCall('metric', 'payment_settlements_total', ['result', 'provider']),
+		],
+	},
+	observations: obsObservations,
+	...extra,
+})[0].result
+
+r = audit({})
+assert(r.valid === true && r.findings.length === 0 && r.cardinalities.length === 2, 'valid contracts, scan, and export pass the audit in wasm')
+
+r = audit({ scan: { calls: [obsScanCall('event', 'order.refunded')] } })
+assert(hasFinding(r, 'lint/event-undeclared'), 'undeclared event name is caught in wasm')
+
+r = audit({ scan: { calls: [obsScanCall('metric', 'storefront_requests_total', ['method', 'route', 'status', 'order_id'])] } })
+assert(hasFinding(r, 'lint/label-undeclared'), 'undeclared label on a declared metric is caught in wasm')
+
+r = audit({
+	labels: obsLabelSchemaWithOrderId,
+	budget: obsBudgetWithOrderId,
+	observations: obsBreachObservations,
+	budgetFile: 'cardinality-budget.yaml',
+})
+assert(
+	hasFinding(r, 'budget/label-over-allocation') && hasFinding(r, 'budget/metric-total-exceeded') && r.valid === false,
+	'budget-breeding label fails the gate in wasm',
+)
+const overAllocation = r.findings.find((f) => f.rule === 'budget/label-over-allocation')
+assert(
+	overAllocation.path === '$.budget.metrics[0].allocations[3]' &&
+		overAllocation.message.includes('allocates 50 (cardinality-budget.yaml)'),
+	'the over-allocation finding cites the exact budget allocation and file',
+)
+assert(r.cardinalities[0].product === 178192, 'the audit reports the honest product of observed distinct values')
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
