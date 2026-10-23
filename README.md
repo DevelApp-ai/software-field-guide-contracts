@@ -220,7 +220,7 @@ make obs-lint                               # scan demo sources against the cont
 make obs-gate                               # gate the demo metrics export
 ```
 
-`TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. To validate an estate split across directories, paste the JSON form directly:
+`TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
 
 ```sh
 opa eval -d policies -I 'data.estate.cross.validate' < bundle.json

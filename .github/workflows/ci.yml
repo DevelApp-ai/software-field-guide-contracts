@@ -11,7 +11,6 @@ on:
 # builds the playground and deploys it through the official Pages actions.
 permissions:
   contents: read
-  pull-requests: write   # TEMP diagnostic: post CI log tail as PR comment (removed before merge)
   pages: write
   id-token: write
 
@@ -31,72 +30,36 @@ jobs:
 
       - name: Install OPA
         run: |
-          exec > >(tee -a pipeline.log) 2>&1
           curl -sSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
           sudo install -m 755 opa /usr/local/bin/opa
           opa version
 
       - name: Install yq
         run: |
-          exec > >(tee -a pipeline.log) 2>&1
           curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
           sudo install -m 755 yq /usr/local/bin/yq
           yq --version
 
       - name: Format check
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          opa fmt --fail -l policies
+        run: opa fmt --fail -l policies
 
       - name: Compile check
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          opa check policies
+        run: opa check policies
 
       - name: Unit tests
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          opa test policies -v
+        run: opa test policies -v
 
       - name: Validate examples
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          make examples
+        run: make examples
 
       - name: Observability cardinality demo
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          make obs-demo
+        run: make obs-demo
 
       - name: Wasm build and browser-bundle smoke test
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          make e2e
+        run: make e2e
 
       - name: Assemble playground
-        run: |
-          exec > >(tee -a pipeline.log) 2>&1
-          make site
-
-      - name: Comment CI log tail on failure
-        if: failure()
-        run: |
-          LOG="pipeline.log"
-          test -f "$LOG" || echo "no pipeline.log written (failure before first wrapped step)" > "$LOG"
-          echo "CI failed. Log tail (temporary diagnostic, removed before merge):" > body.txt
-          echo >> body.txt
-          tail -c 22000 "$LOG" >> body.txt
-          python3 - <<'PYEOF' > payload.json
-          import json
-          body = open('body.txt').read()
-          print(json.dumps({'body': 'CI failure log tail:\n```\n' + body + '\n```'}))
-          PYEOF
-          curl -sS -f -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d @payload.json \
-            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+        run: make site
 
       - name: Setup Pages
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
