@@ -231,7 +231,7 @@ check-actions:
 	@test -f "$(ACTIONS_REGISTRY)" || { echo "usage: make check-actions [ACTIONS_REGISTRY=...] [TODAY=YYYY-MM-DD]"; exit 2; }
 	@mkdir -p build
 	yq -o=json '.' '$(ACTIONS_REGISTRY)' \
-		| jq -cs --arg today "$(TODAY)" '{registry: .[0], today: $today}' \
+		| jq -cs --arg today "$(TODAY)" '{registry: .[0], today: $$today}' \
 		| $(OPA) eval -d policies -I 'data.actions.validate' --format=pretty | tee build/check-actions.json
 	@jq -e '.valid == true' build/check-actions.json > /dev/null \
 		|| { echo "check-actions: the action registry is invalid — findings above"; exit 1; }
@@ -244,7 +244,7 @@ actions-gate:
 	@test -f "$(ACTIONS_REGISTRY)" || { echo "usage: make actions-gate [ACTIONS_REGISTRY=... ACTIONS_MANIFEST=...] [TODAY=YYYY-MM-DD]"; exit 2; }
 	@mkdir -p build
 	yq -o=json '.' '$(ACTIONS_REGISTRY)' '$(ACTIONS_MANIFEST)' \
-		| jq -cs --arg today "$(TODAY)" '{registry: .[0], manifest: .[1], today: $today}' \
+		| jq -cs --arg today "$(TODAY)" '{registry: .[0], manifest: .[1], today: $$today}' \
 		| $(OPA) eval -d policies -I 'data.actions.gate' --format=pretty | tee build/actions-gate.json
 	@jq -e '.valid == true' build/actions-gate.json > /dev/null \
 		|| { echo "actions-gate: the action scope gate found errors above"; exit 1; }
