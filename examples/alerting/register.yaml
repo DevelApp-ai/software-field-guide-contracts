@@ -1,0 +1,57 @@
+# Incident register — The Software Field Guide, issue #69.
+#
+# The evidence of what happened after the pages: every alert that fired
+# in the window, every incident it opened (each incident is a record,
+# and names its record linkage), and each incident's postmortem actions
+# with closure verification. The gate judges this register against the
+# alerting contract (alerting.yaml): every fired alert must link to a
+# record, every severity must have been on the ladder at detection
+# time, and every postmortem action must be closed with proof.
+#
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+
+owner: Storefront team
+reviewedOn: 2026-10-19
+
+# The alerts that actually fired. Nothing here is hypothetical: the
+# register is the trail paging must leave.
+firedAlerts:
+  - {alert: storefront-5xx-rate, firedOn: 2026-09-30}
+  - {alert: storefront-5xx-rate, firedOn: 2026-10-08}
+  - {alert: payment-provider-flap, firedOn: 2026-10-12}
+
+incidents:
+  # The order_id cardinality incident: the storefront 5xx rate spiked
+  # when the label-accretion label bloated the request paths.
+  - id: INC-2026-038
+    detectedOn: 2026-09-30
+    severity: sev-1
+    record: INC-2026-038 in the incident register
+    alerts: [storefront-5xx-rate]
+    postmortem:
+      - id: act-038-1
+        action: Remove order_id from the storefront_requests_total metric labels
+        closedOn: 2026-10-11
+        verifiedBy: PR #2141 merged; the metrics export shows no order_id label and 5xx rates back to baseline
+
+  # The order_id regression caught at PR time (see the observability
+  # demo): a smaller spike, one verified action.
+  - id: INC-2026-041
+    detectedOn: 2026-10-08
+    severity: sev-2
+    record: INC-2026-041 in the incident register
+    alerts: [storefront-5xx-rate]
+    postmortem:
+      - id: act-041-1
+        action: Gate order_id out of the metric label schema in the observability contracts
+        closedOn: 2026-10-11
+        verifiedBy: make check-obs and make obs-demo green on the updated label schema
+
+  # The payment provider flap: still open, honestly empty — a postmortem
+  # with no actions yet is not a failure; one with unverified actions is.
+  - id: INC-2026-043
+    detectedOn: 2026-10-12
+    severity: sev-2
+    record: INC-2026-043 in the incident register
+    alerts: [payment-provider-flap]
+    postmortem: []

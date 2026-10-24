@@ -1,0 +1,51 @@
+# Alerting contract — The Software Field Guide, issue #69.
+#
+# The promise made before anything pages: a severity ladder defined on
+# dated rungs, runbooks with their escalation clocks, and alert rules
+# that each name an owner, a severity from the ladder, a runbook, and a
+# record destination. Example dates are chosen relative to the CI
+# anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+
+# The severity ladder: each rung carries the day it was defined, so a
+# severity can never have been invented during the incident it grades.
+severityLadder:
+  - name: sev-3
+    description: Low-impact degradation on one team's surface; no customer promise broken
+    definedOn: 2026-01-15
+  - name: sev-2
+    description: A customer-visible promise is degraded; the on-call lead coordinates the response
+    definedOn: 2026-01-15
+  - name: sev-1
+    description: Estate-wide incident; the incident commander takes the bridge
+    definedOn: 2026-06-01
+
+# Runbooks: each carries its escalation clock — who escalates, by when.
+runbooks:
+  - id: rb-storefront-5xx
+    link: https://github.com/DevelApp-ai/runbooks/blob/main/storefront-5xx.md
+    escalationClock: Acknowledge in 15 minutes; escalate to the storefront on-call lead at 60
+  - id: rb-payment-provider
+    link: https://github.com/DevelApp-ai/runbooks/blob/main/payment-provider.md
+    escalationClock: Acknowledge in 15 minutes; escalate to the payments on-call at 30
+
+# Alert rules: owner, severity, runbook, record destination — all four,
+# or the rule does not ship.
+alerts:
+  - id: storefront-5xx-rate
+    owner: Storefront team
+    severity: sev-2
+    runbook: rb-storefront-5xx
+    recordDestination: examples/alerting/register.yaml
+  - id: payment-provider-flap
+    owner: Payments team
+    severity: sev-2
+    runbook: rb-payment-provider
+    recordDestination: examples/alerting/register.yaml
+  - id: storefront-latency
+    owner: Storefront team
+    severity: sev-3
+    runbook: rb-storefront-5xx
+    recordDestination: examples/alerting/register.yaml

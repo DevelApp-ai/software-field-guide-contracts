@@ -1,0 +1,42 @@
+# The unlinked alert: storefront-latency fired on 2026-10-15 and the
+# register shows the firing — but no incident claims it. Someone was
+# paged, someone probably looked, and nothing entered the register:
+# the exact gap the #69 gate exists to catch by construction.
+owner: Storefront team
+reviewedOn: 2026-10-19
+
+firedAlerts:
+  - {alert: storefront-5xx-rate, firedOn: 2026-09-30}
+  - {alert: storefront-5xx-rate, firedOn: 2026-10-08}
+  - {alert: payment-provider-flap, firedOn: 2026-10-12}
+  - {alert: storefront-latency, firedOn: 2026-10-15}
+
+incidents:
+  - id: INC-2026-038
+    detectedOn: 2026-09-30
+    severity: sev-1
+    record: INC-2026-038 in the incident register
+    alerts: [storefront-5xx-rate]
+    postmortem:
+      - id: act-038-1
+        action: Remove order_id from the storefront_requests_total metric labels
+        closedOn: 2026-10-11
+        verifiedBy: PR #2141 merged; the metrics export shows no order_id label and 5xx rates back to baseline
+
+  - id: INC-2026-041
+    detectedOn: 2026-10-08
+    severity: sev-2
+    record: INC-2026-041 in the incident register
+    alerts: [storefront-5xx-rate]
+    postmortem:
+      - id: act-041-1
+        action: Gate order_id out of the metric label schema in the observability contracts
+        closedOn: 2026-10-11
+        verifiedBy: make check-obs and make obs-demo green on the updated label schema
+
+  - id: INC-2026-043
+    detectedOn: 2026-10-12
+    severity: sev-2
+    record: INC-2026-043 in the incident register
+    alerts: [payment-provider-flap]
+    postmortem: []
