@@ -6,6 +6,8 @@ It also implements the **authorization policy compiler** from [book issue #59](h
 
 And it implements the **observability vocabulary and cardinality linter** from [book issue #61](https://github.com/DevelApp-ai/software-field-guide/issues/61): telemetry names and labels are versioned contracts, a scanner lints instrumentation code against them, and a cardinality gate catches the label that breeds a metrics budget breach — citing the budget file it breaches.
 
+And it implements the **action scope validator** from [book issue #70](https://github.com/DevelApp-ai/software-field-guide/issues/70): the micro-action vocabulary is a versioned registry — named, typed, parameter-checked actions with execution envelopes under platform ceilings — and an agent permission manifest is judged against it, default-deny: no phantom grants, no scopes on undeclared parameters, no stage that contradicts the effects it grants, no Critical action that no longer asks before it acts.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -21,10 +23,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `obs/lint` | an instrumentation scan against both vocabularies | `{"vocabulary": {...}, "labels": {...}, "scan": {...}}` |
 | `obs/gate` | a metrics export against the cardinality budget | `{"labels": {...}, "budget": {...}, "observations": [...], "budgetFile": "..."}` |
 | `obs/audit` | all three at once — one verdict, one findings list | the superset of the above (plus `"today"`) |
+| `actions/validate` | one action registry | `{"registry": {...}, "today": "YYYY-MM-DD"}` |
+| `actions/gate` | an agent manifest against the registry | `{"registry": {...}, "manifest": {...}, "today": "YYYY-MM-DD"}` |
+| `actions/audit` | both at once — one verdict, the per-agent scoping | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.3** — the estate/seam formats, the authorization compiler, and the observability linter work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.4** — the estate/seam formats, the authorization compiler, the observability linter, and the action scope validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -206,6 +211,73 @@ make obs-demo
 #      the cardinality budget total is 4000 (cardinality-budget.with-order-id.yaml)"
 ```
 
+## The action scope validator
+
+Where the authorization compiler judges *people*, the action scope validator judges *agents*: the micro-actions an AI agent may perform are a versioned vocabulary, and the manifest that grants them is judged against it, default-deny. A grant for an action the registry never declared is a hope wearing a permission's clothes — the validator catches it at PR time.
+
+### Two documents, one judgment
+
+```yaml
+# registry.yaml — the vocabulary: named, typed, parameter-checked actions
+version: 1
+reviewedOn: 2026-10-01
+platformCeilings: {maxTimeoutSeconds: 600, maxMemoryMB: 2048}
+servers:
+  - {name: invoice-service, approved: true}
+actions:
+  - id: send-invoice-email
+    name: Send invoice email
+    description: Send one invoice to one recipient through the registered invoice service
+    type: ExternalServer
+    parameters:
+      - {name: invoiceId, type: string, validation: {minLength: 1}}
+    outputs: {messageId: string}
+    envelope: {timeoutSeconds: 60, maxMemoryMB: 256, useIsolation: false}
+    securityLevel: Critical
+    confirmation: confirm
+    effect: write
+    server: {name: invoice-service, operation: sendInvoiceEmail,
+             mappings: {invoiceId: invoiceId, recipient: recipient}}
+
+# manifest.yaml — the claim: agents on the autonomy ladder, granted from
+# the registry above, every argument scoped
+owner: Billing team
+reviewedOn: 2026-10-15
+agents:
+  - agent: archive-reader
+    stage: read-only
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-2026-*"}
+```
+
+See [examples/actions/](examples/actions/) for the complete pair and [schemas/](schemas/) for the two JSON Schema drafts. Note what is where: the registry owns the vocabulary and its envelopes; the manifest owns only claims, and every claim is judged against the registry.
+
+### What the validator enforces and proves
+
+- **Loud validation of the registry** (`actions/validate`): missing fields, unversioned documents, stale review stamps, duplicate ids, and the anatomy rules — parameters with known types *and* validation objects (an untyped parameter cannot be checked, only stringly-trusted; `enumValues`, when declared, a non-empty array), outputs declared, envelopes inside the platform ceilings and demanding isolation for scripted types, confirmation pinned to the severity classification (a High or Critical action must demand `confirm`, never `auto-confirm`), and external calls naming an operation on a registered, approved server with a mapping for every parameter.
+- **The manifest gate** (`actions/gate`): every grant names a registry-declared action (a phantom grant fails), every argument scope names a parameter the granted action actually declares, no stage contradicts the effects it grants (a read-only agent holds no write; a quarantined agent holds nothing), and the owner and review stamp are present and honest.
+- **One audit** (`actions/audit`): the composed entrypoint for CI and the playground — registry validated, manifest gated, one verdict, and the per-agent scoping alongside: each agent, its stage, and the actions it may perform.
+
+The done-when proof from book issue #70 — a phantom grant caught with the agent and the undeclared action cited — runs as a single target:
+
+```sh
+make actions-demo
+# → 1. the action registry validates
+#   2. the seeded manifest passes the action scope gate
+#   3. an untyped parameter is caught at contract time:
+#      action/parameter-untyped — naming invoiceId
+#   4. an envelope that exceeds the platform ceiling is caught:
+#      envelope/exceeds-ceiling — naming compile-quarterly-report
+#   5. a Critical action that no longer asks is caught:
+#      action/confirm-required-at-level — naming send-invoice-email
+#   6. a grant for an action the registry never declared is caught:
+#      manifest/action-unknown — naming purge-invoice-archive
+#   7. a read-only agent granted a write is caught:
+#      manifest/stage-contradiction — naming archive-reader
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -218,6 +290,8 @@ make check-authz   FILE=examples/authz/storefront.yaml TODAY=2026-10-20
 make check-obs     TODAY=2026-10-20          # vocabulary + label schema + budget
 make obs-lint                               # scan demo sources against the contracts
 make obs-gate                               # gate the demo metrics export
+make check-actions TODAY=2026-10-20         # the action registry alone
+make actions-gate  TODAY=2026-10-20         # the demo manifest against the registry
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -228,7 +302,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -241,15 +315,17 @@ The playground imports the opa-wasm runtime from [site/vendor/](site/vendor/) �
 policies/estate/    enclave.rego, seam.rego, cross.rego, lib.rego
 policies/authz/     lib, model, policy, decide, retro, disabled
 policies/obs/       lib, model, policy, lint, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs)
+policies/actions/   lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + actions)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
-examples/           valid YAML contracts, a bundle, an authz policy set,
-                    and the observability demo (contracts + instrumented sources)
+examples/           valid YAML contracts, a bundle, an authz policy set, the action
+                    registry/manifest pair, and the observability demo (contracts +
+                    instrumented sources)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
 Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, wasm build, e2e, Pages deploy
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, actions demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -259,7 +335,8 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-* target
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the five `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the six `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 
 ## License

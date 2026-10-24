@@ -1,0 +1,35 @@
+# The broken manifest: the chargeback agent claims an action that does not exist.
+#
+# The phantom grant: purge-invoice-archive is not in the registry — a
+# grant for an undeclared action is a hope wearing a permission's
+# clothes, and default-deny means the manifest may only grant what the
+# vocabulary contains. The validator must catch it at PR time with the
+# agent and the phantom action cited.
+
+owner: Billing team
+reviewedOn: 2026-10-15
+
+agents:
+  - agent: invoice-drafting-agent
+    stage: autonomous
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+      - action: summarize-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+
+  - agent: chargeback-agent
+    stage: propose-only
+    grants:
+      - action: purge-invoice-archive
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+
+  - agent: archive-reader
+    stage: read-only
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-2026-*"}

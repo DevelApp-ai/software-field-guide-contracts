@@ -1,0 +1,179 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/actions-registry.schema.json",
+	"title": "Action registry",
+	"description": "The micro-action vocabulary, as defined in The Software Field Guide, issue #70: named, typed, parameter-checked actions with enforced execution envelopes, security classifications, confirmation demands, effects, and — for external calls — a registered, approved server with argument mappings. This schema mirrors the shape rules of the Rego validator (policies/actions); the validator additionally enforces the semantic rules a JSON schema cannot — action ids unique, parameter names unique per action, parameters carrying both a known type and a validation object (enumValues, when declared, a non-empty array), envelopes inside the platform ceilings and declaring isolation, confirmation pinned to the severity classification (a High or Critical write must demand confirm, never auto-confirm), external calls naming an operation, a known and approved registered server with a mapping for every parameter, and reviews not older than 365 days nor in the future.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "platformCeilings", "servers", "actions"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the registry. The vocabulary is versioned like code — an action set that can silently change is folklore, not a registry."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the registry was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"platformCeilings": {
+			"type": "object",
+			"required": ["maxTimeoutSeconds", "maxMemoryMB"],
+			"additionalProperties": false,
+			"properties": {
+				"maxTimeoutSeconds": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "The most wall clock any single action may hold, in seconds. Every envelope is judged against this ceiling — an action cannot grant itself more time than the host is willing to give any action."
+				},
+				"maxMemoryMB": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "The most memory any single action may hold, in MB. Every envelope is judged against this ceiling."
+				}
+			}
+		},
+		"servers": {
+			"type": "array",
+			"description": "The registered external servers an action may call. A server may be registered but unapproved — it must then be referenced by nothing.",
+			"items": {
+				"type": "object",
+				"required": ["name", "approved"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Server name. Unique across the registry; external actions reference it."
+					},
+					"approved": {
+						"type": "boolean",
+						"description": "Whether the server has been approved for production calls. An external action naming an unapproved server does not ship."
+					}
+				}
+			}
+		},
+		"actions": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The micro-actions. Each is named, typed, parameter-checked, envelope-bound, classified, and confirmed — the whole anatomy, or it is not an action.",
+			"items": {
+				"type": "object",
+				"required": ["id", "name", "description", "type", "parameters", "outputs", "envelope", "securityLevel", "confirmation", "effect"],
+				"additionalProperties": true,
+				"properties": {
+					"id": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Action id. Unique across the registry; the agent manifest grants it verbatim."
+					},
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The action's human name. An action nobody can name is an action nobody can scope."
+					},
+					"description": {
+						"type": "string",
+						"minLength": 1,
+						"description": "What the action does, in terms you are willing to say out loud."
+					},
+					"type": {
+						"type": "string",
+						"enum": ["AgenticPrompt", "PythonScript", "CSharpScript", "ExternalServer"],
+						"description": "The execution family. Closed vocabulary: a type nobody executes is a finding, not an action."
+					},
+					"parameters": {
+						"type": "array",
+						"description": "The action's parameters, each with a name, a known type, and a validation object. The declared checks are what the engine enforces — a schema without checks is documentation, not validation.",
+						"items": {
+							"type": "object",
+							"required": ["name", "type", "validation"],
+							"additionalProperties": true,
+							"properties": {
+								"name": {
+									"type": "string",
+									"minLength": 1,
+									"description": "Parameter name. Unique within the action; argument scopes constrain it by this name."
+								},
+								"type": {
+									"type": "string",
+									"enum": ["string", "number", "boolean"],
+									"description": "The parameter's type. Closed vocabulary. An untyped parameter cannot be checked, only stringly-trusted."
+								},
+								"validation": {
+									"type": "object",
+									"description": "The checks the engine enforces at call time. enumValues, when declared, must be a non-empty array of allowed values."
+								}
+							}
+						}
+					},
+					"outputs": {
+						"type": "object",
+						"minProperties": 1,
+						"description": "The action's declared outputs, as name-to-type pairs. An action that returns nothing has no contract with its caller."
+					},
+					"envelope": {
+						"type": "object",
+						"required": ["timeoutSeconds", "maxMemoryMB", "useIsolation"],
+						"additionalProperties": false,
+						"properties": {
+							"timeoutSeconds": {
+								"type": "integer",
+								"minimum": 1,
+								"description": "The action's time budget. Must not exceed platformCeilings.maxTimeoutSeconds."
+							},
+							"maxMemoryMB": {
+								"type": "integer",
+								"minimum": 1,
+								"description": "The action's memory budget. Must not exceed platformCeilings.maxMemoryMB."
+							},
+							"useIsolation": {
+								"type": "boolean",
+								"description": "Whether the action runs in isolation. A scripted action without isolation is a guest with the house keys."
+							}
+						}
+					},
+					"securityLevel": {
+						"type": "string",
+						"enum": ["Low", "Standard", "High", "Critical"],
+						"description": "The action's severity classification, from the closed ladder."
+					},
+					"confirmation": {
+						"type": "string",
+						"enum": ["confirm", "auto-confirm"],
+						"description": "Whether a human must confirm before the action fires. A High or Critical action that auto-confirms is exactly how a blast radius grows one PR at a time."
+					},
+					"effect": {
+						"type": "string",
+						"enum": ["read", "write"],
+						"description": "What the action does to the estate. A read-only agent granted a write contradicts its stage."
+					},
+					"server": {
+						"type": "object",
+						"required": ["name", "operation", "mappings"],
+						"additionalProperties": true,
+						"properties": {
+							"name": {
+								"type": "string",
+								"minLength": 1,
+								"description": "The registered server this action calls. Must be declared and approved in this registry."
+							},
+							"operation": {
+								"type": "string",
+								"minLength": 1,
+								"description": "The operation invoked on the server. An external call without an operation is a hope, not a call."
+							},
+							"mappings": {
+								"type": "object",
+								"minProperties": 1,
+								"description": "Parameter-to-argument mappings for the call. Every declared parameter must be mapped."
+							}
+						},
+						"description": "Required for ExternalServer actions; forbidden vocabulary for the others."
+					}
+				}
+			}
+		}
+	}
+}

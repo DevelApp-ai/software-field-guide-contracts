@@ -1,0 +1,39 @@
+# The broken manifest: the read-only archive reader was handed a pen.
+#
+# The stage contradiction: archive-reader is pinned to the read-only
+# rung, but file-draft-chargeback is a write — a stage that grants a
+# write is not read-only, whatever the manifest says. The validator
+# must catch it at PR time with the agent, the stage, and the effect
+# cited.
+
+owner: Billing team
+reviewedOn: 2026-10-15
+
+agents:
+  - agent: invoice-drafting-agent
+    stage: autonomous
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+      - action: summarize-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+
+  - agent: chargeback-agent
+    stage: propose-only
+    grants:
+      - action: file-draft-chargeback
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+          - {parameter: amount, pattern: "*"}
+
+  - agent: archive-reader
+    stage: read-only
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-2026-*"}
+      - action: file-draft-chargeback
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
