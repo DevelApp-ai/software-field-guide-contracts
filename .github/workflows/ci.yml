@@ -6,11 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Two deploy mechanisms must not fight over the Pages deployment:
-# the old Jekyll scaffold was removed in favor of this workflow, which
-# builds the playground and deploys it through the official Pages actions.
-# TEMPORARY DIAGNOSTICS VERSION (will be reverted): captures early-step
-# output to /tmp/diag.log and posts it as a PR comment when the job fails.
+# TEMPORARY DIAGNOSTICS VERSION (will be reverted): every policy step's
+# output is captured to /tmp/diag.log and posted as a PR comment on failure.
 permissions:
   contents: read
   pages: write
@@ -31,29 +28,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Post-checkout probe
-        run: |
-          {
-            echo '=== post-checkout probe ==='
-            pwd
-            ls -la
-            git log -1 --format='%H %s'
-            git rev-parse HEAD
-            ls -la policies | head -5
-          } > /tmp/diag.log 2>&1 || true
-
       - name: Install OPA
         run: |
           {
             echo '=== Install OPA ==='
             set -x
             curl -sSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
-            ls -l opa
-            head -c 16 opa | od -An -tx1 || true
             sudo install -m 755 opa /usr/local/bin/opa
             opa version
             echo 'OPA-OK'
-          } >> /tmp/diag.log 2>&1
+          } > /tmp/diag.log 2>&1
 
       - name: Install yq
         run: |
@@ -61,36 +45,74 @@ jobs:
             echo '=== Install yq ==='
             set -x
             curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-            ls -l yq
-            head -c 16 yq | od -An -tx1 || true
             sudo install -m 755 yq /usr/local/bin/yq
             yq --version
             echo 'YQ-OK'
           } >> /tmp/diag.log 2>&1
 
       - name: Format check
-        run: opa fmt --fail -l policies
+        run: |
+          {
+            echo '=== Format check ==='
+            opa fmt --fail -l policies
+            echo 'FMT-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Compile check
-        run: opa check policies
+        run: |
+          {
+            echo '=== Compile check ==='
+            opa check policies
+            echo 'CHECK-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Unit tests
-        run: opa test policies -v
+        run: |
+          {
+            echo '=== Unit tests ==='
+            opa test policies -v
+            echo 'TEST-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Validate examples
-        run: make examples
+        run: |
+          {
+            echo '=== Validate examples ==='
+            make examples
+            echo 'EXAMPLES-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Observability cardinality demo
-        run: make obs-demo
+        run: |
+          {
+            echo '=== obs-demo ==='
+            make obs-demo
+            echo 'OBS-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Alert-to-record linkage demo
-        run: make alerts-demo
+        run: |
+          {
+            echo '=== alerts-demo ==='
+            make alerts-demo
+            echo 'ALERTS-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Wasm build and browser-bundle smoke test
-        run: make e2e
+        run: |
+          {
+            echo '=== e2e ==='
+            make e2e
+            echo 'E2E-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Assemble playground
-        run: make site
+        run: |
+          {
+            echo '=== site ==='
+            make site
+            echo 'SITE-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Diagnostics on failure
         if: failure() && github.event_name == 'pull_request'
@@ -99,9 +121,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           {
-            echo '**CI diagnostics - temporary step, will be reverted**'
+            echo '**CI diagnostics round 2 - temporary step, will be reverted**'
             echo '```'
-            tail -n 200 /tmp/diag.log 2>/dev/null || echo '(diag log missing - failure happened before the probe step)'
+            tail -n 400 /tmp/diag.log 2>/dev/null || echo '(diag log missing)'
             echo '```'
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md || true
