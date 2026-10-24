@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the six policy.wasm builds and evaluates
+// End-to-end smoke test: loads the seven policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -375,6 +375,119 @@ assert(
 )
 assert(r.cardinalities[0].product === 178192, 'the audit reports the honest product of observed distinct values')
 
+
+// --- alerts (mirror the unit-test fixture) ---------------------------------
+
+const alertingContract = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	severityLadder: [
+		{ name: 'sev-3', description: "Low-impact degradation on one team's surface", definedOn: '2026-01-15' },
+		{ name: 'sev-2', description: 'A customer-visible promise is degraded', definedOn: '2026-01-15' },
+		{ name: 'sev-1', description: 'Estate-wide incident; the commander takes the bridge', definedOn: '2026-06-01' },
+	],
+	runbooks: [
+		{ id: 'rb-storefront-5xx', link: 'https://example/runbooks/storefront-5xx.md', escalationClock: 'Acknowledge in 15 minutes; escalate to the storefront on-call lead at 60' },
+		{ id: 'rb-payment-provider', link: 'https://example/runbooks/payment-provider.md', escalationClock: 'Acknowledge in 15 minutes; escalate to the payments on-call at 30' },
+	],
+	alerts: [
+		{ id: 'storefront-5xx-rate', owner: 'Storefront team', severity: 'sev-2', runbook: 'rb-storefront-5xx', recordDestination: 'register.yaml' },
+		{ id: 'payment-provider-flap', owner: 'Payments team', severity: 'sev-2', runbook: 'rb-payment-provider', recordDestination: 'register.yaml' },
+		{ id: 'storefront-latency', owner: 'Storefront team', severity: 'sev-3', runbook: 'rb-storefront-5xx', recordDestination: 'register.yaml' },
+	],
+}
+
+const incidentRegister = {
+	owner: 'Storefront team',
+	reviewedOn: '2026-10-19',
+	firedAlerts: [
+		{ alert: 'storefront-5xx-rate', firedOn: '2026-09-30' },
+		{ alert: 'storefront-5xx-rate', firedOn: '2026-10-08' },
+		{ alert: 'payment-provider-flap', firedOn: '2026-10-12' },
+	],
+	incidents: [
+		{
+			id: 'INC-2026-038',
+			detectedOn: '2026-09-30',
+			severity: 'sev-1',
+			record: 'INC-2026-038 in the incident register',
+			alerts: ['storefront-5xx-rate'],
+			postmortem: [
+				{ id: 'act-038-1', action: 'Remove order_id from the storefront_requests_total labels', closedOn: '2026-10-11', verifiedBy: 'PR #2141 merged; the export shows no order_id label' },
+			],
+		},
+		{ id: 'INC-2026-041', detectedOn: '2026-10-08', severity: 'sev-2', record: 'INC-2026-041 in the incident register', alerts: ['storefront-5xx-rate'], postmortem: [] },
+		{ id: 'INC-2026-043', detectedOn: '2026-10-12', severity: 'sev-2', record: 'INC-2026-043 in the incident register', alerts: ['payment-provider-flap'], postmortem: [] },
+	],
+}
+
+const alertsPolicy = await load('alerts')
+
+const alertsAudit = (alerting, register) =>
+	alertsPolicy.evaluate({ alerting, register, today })[0].result
+
+r = alertsAudit(alertingContract, incidentRegister)
+assert(
+	r.valid === true && r.findings.length === 0 && r.linkages.length === 2,
+	'linked alert and register pass the audit in wasm',
+)
+assert(
+	Object.keys(r).sort().join(',') === 'findings,linkages,valid',
+	'the audit result shape is exactly {valid, findings, linkages} in wasm',
+)
+
+r = alertsAudit(alertingContract, {
+	...incidentRegister,
+	firedAlerts: [...incidentRegister.firedAlerts, { alert: 'storefront-latency', firedOn: '2026-10-15' }],
+})
+assert(
+	hasFinding(r, 'alerts/no-record-linkage') && r.valid === false,
+	'an alert that fired without a record is caught in wasm',
+)
+const unlinked = r.linkages.find((l) => l.alert === 'storefront-latency')
+assert(
+	unlinked && unlinked.record === null,
+	'the linkage row for the unlinked alert shows NO RECORD (record: null)',
+)
+
+r = alertsAudit(alertingContract, {
+	...incidentRegister,
+	incidents: [
+		incidentRegister.incidents[0],
+		incidentRegister.incidents[1],
+		{ ...incidentRegister.incidents[2], severity: 'sev-0' },
+	],
+})
+assert(hasFinding(r, 'gate/severity-off-ladder'), 'a severity off the ladder is caught in wasm')
+
+r = alertsAudit({
+	...alertingContract,
+	severityLadder: [
+		alertingContract.severityLadder[0],
+		alertingContract.severityLadder[1],
+		{ ...alertingContract.severityLadder[2], definedOn: today },
+	],
+}, incidentRegister)
+assert(hasFinding(r, 'gate/severity-defined-after-detection'), 'a severity defined after the incident is caught in wasm')
+
+r = alertsAudit(alertingContract, {
+	...incidentRegister,
+	incidents: [
+		incidentRegister.incidents[0],
+		{
+			...incidentRegister.incidents[1],
+			postmortem: [{ id: 'act-041-1', action: 'Gate order_id out of the label schema', closedOn: '2026-10-11' }],
+		},
+		incidentRegister.incidents[2],
+	],
+})
+assert(hasFinding(r, 'gate/action-unverified'), 'an unverified postmortem action is caught in wasm')
+
+r = alertsAudit({
+	...alertingContract,
+	runbooks: [{ ...alertingContract.runbooks[0], escalationClock: null }],
+}, incidentRegister)
+assert(hasFinding(r, 'runbook/escalation-clock-required'), 'a runbook without its escalation clock is caught in wasm')
 
 // --- actions (mirror the unit-test fixture) ---------------------------------
 

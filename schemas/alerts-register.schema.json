@@ -1,0 +1,109 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/alerts-register.schema.json",
+	"title": "Incident register",
+	"description": "The evidence of what happened after the pages, as defined in The Software Field Guide, issue #69: the alerts that actually fired, the incidents they opened (each incident is a record, and names its record linkage), and each incident's postmortem actions with closure verification. The Rego gate (policies/alerts) judges this register against the alerting contract: every fired alert must be linked to a record, every incident's severity must be on the ladder as it stood at detection time, and every postmortem action must carry closure verification. This schema mirrors the shape rules; the validator additionally enforces the cross-document rules a JSON schema cannot — the alert names must be declared in the contract, the severities must exist on its ladder with definedOn dates before detection, and the record linkage must actually resolve to an incident.",
+	"type": "object",
+	"required": ["owner", "reviewedOn", "firedAlerts", "incidents"],
+	"additionalProperties": true,
+	"properties": {
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Who owns the register and answers for its honesty."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the register was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"firedAlerts": {
+			"type": "array",
+			"description": "The alerts that actually fired in the window. Nothing here is hypothetical — the register is the trail paging must leave. The gate fails any fired alert that no incident claims: nothing pages without creating a record.",
+			"items": {
+				"type": "object",
+				"required": ["alert", "firedOn"],
+				"additionalProperties": true,
+				"properties": {
+					"alert": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The alert rule id that fired. Must be declared in the alerting contract."
+					},
+					"firedOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the alert fired, YYYY-MM-DD."
+					}
+				}
+			}
+		},
+		"incidents": {
+			"type": "array",
+			"description": "The incidents the pages opened. Each incident is a record, names the record it lives in, and claims the alerts that fired into it.",
+			"items": {
+				"type": "object",
+				"required": ["id", "detectedOn", "severity", "record", "alerts", "postmortem"],
+				"additionalProperties": true,
+				"properties": {
+					"id": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Incident id, e.g. INC-2026-041."
+					},
+					"detectedOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the incident was detected, YYYY-MM-DD. The gate checks the severity existed on the ladder by this date."
+					},
+					"severity": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The severity the incident was graded with. Must be a name from the contract's severity ladder, defined before detectedOn — a severity invented during the incident is a judgment call, not a fact."
+					},
+					"record": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The record this incident lives in — a link or an id, never empty. The incident is the record the alert's page must link to."
+					},
+					"alerts": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 },
+						"description": "The alert rules whose firing opened this incident. This is the linkage side of 'nothing pages without creating a record': a fired alert no incident claims is a gate failure."
+					},
+					"postmortem": {
+						"type": "array",
+						"description": "The incident's postmortem actions. An open incident with no actions yet is honest; an action without closure verification is not.",
+						"items": {
+							"type": "object",
+							"required": ["id", "action"],
+							"additionalProperties": true,
+							"properties": {
+								"id": {
+									"type": "string",
+									"minLength": 1,
+									"description": "Action id."
+								},
+								"action": {
+									"type": "string",
+									"minLength": 1,
+									"description": "What the action is, in one sentence."
+								},
+								"closedOn": {
+									"type": "string",
+									"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+									"description": "The day the action closed, YYYY-MM-DD. Required for closure verification."
+								},
+								"verifiedBy": {
+									"type": "string",
+									"minLength": 1,
+									"description": "Who or what proved the closure, e.g. the PR that landed or the check that went green. An action without proof of closure is still open."
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

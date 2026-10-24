@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Action Scope — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -161,6 +161,7 @@
 		<button role="tab" id="tab-bundle" aria-selected="false">Whole estate</button>
 		<button role="tab" id="tab-authz" aria-selected="false">Authz explainer</button>
 		<button role="tab" id="tab-obs" aria-selected="false">Obs linter</button>
+		<button role="tab" id="tab-alerts" aria-selected="false">Alert gate</button>
 		<button role="tab" id="tab-actions" aria-selected="false">Action scope</button>
 	</div>
 
@@ -195,6 +196,14 @@
 		<textarea id="editor-obs-runtime" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-alerts">
+		<p class="hint">Gate an <strong>incident register</strong> against an <strong>alerting contract</strong> — a severity ladder with dated rungs, runbooks with escalation clocks, and alert rules with owners. Every fired alert must be claimed by an incident record, severities must be on the ladder as it stood at detection time, and postmortem actions must be verified closed. Try the loaded example, then add <code>{"alert": "storefront-latency", "firedOn": "2026-10-15"}</code> to the register's firedAlerts and watch the gate catch the alert that paged nobody.</p>
+		<label for="editor-alerts-contract">Alerting contract (severity ladder, runbooks, alert rules)</label>
+		<textarea id="editor-alerts-contract" spellcheck="false"></textarea>
+		<label for="editor-alerts-register">Incident register</label>
+		<textarea id="editor-alerts-register" spellcheck="false"></textarea>
+	</section>
+
 	<section class="panel" id="panel-actions">
 		<p class="hint">Gate an <strong>agent manifest</strong> against the <strong>action registry</strong> — the micro-action vocabulary (named, typed, parameter-checked actions with execution envelopes under the platform ceilings, confirmation pinned to the severity classification) and the default-deny grants that claim it. The left editor holds the registry; the right one holds the manifest: agents pinned to rungs of the autonomy ladder, granted only declared actions, every argument scoped. Try the loaded example, then grant <code>archive-reader</code> the <code>file-draft-chargeback</code> action and watch the stage contradiction appear.</p>
 		<label for="editor-actions-registry">Action registry (micro-actions, envelopes, ceilings, servers)</label>
@@ -218,7 +227,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make actions-demo</code> for the action scope walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough., <code>make actions-demo</code> for the action scope walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -228,6 +237,7 @@ const tabs = [
 	{ id: 'bundle', pkg: 'estate.cross' },
 	{ id: 'authz', pkg: 'authz' },
 	{ id: 'obs', pkg: 'obs' },
+	{ id: 'alerts', pkg: 'alerts' },
 	{ id: 'actions', pkg: 'actions' },
 ];
 let active = 'enclave';
@@ -370,6 +380,47 @@ const examples = {
 			{ metric: 'storefront_requests_total', label: 'status', distinct: 37 },
 			{ metric: 'payment_settlements_total', label: 'result', distinct: 2 },
 			{ metric: 'payment_settlements_total', label: 'provider', distinct: 3 },
+		],
+	},
+	alertsContract: {
+		version: 1,
+		reviewedOn: '2026-10-01',
+		severityLadder: [
+			{ name: 'sev-3', description: "Low-impact degradation on one team's surface", definedOn: '2026-01-15' },
+			{ name: 'sev-2', description: 'A customer-visible promise is degraded', definedOn: '2026-01-15' },
+			{ name: 'sev-1', description: 'Estate-wide incident; the commander takes the bridge', definedOn: '2026-06-01' },
+		],
+		runbooks: [
+			{ id: 'rb-storefront-5xx', link: 'https://example/runbooks/storefront-5xx.md', escalationClock: 'Acknowledge in 15 minutes; escalate to the storefront on-call lead at 60' },
+			{ id: 'rb-payment-provider', link: 'https://example/runbooks/payment-provider.md', escalationClock: 'Acknowledge in 15 minutes; escalate to the payments on-call at 30' },
+		],
+		alerts: [
+			{ id: 'storefront-5xx-rate', owner: 'Storefront team', severity: 'sev-2', runbook: 'rb-storefront-5xx', recordDestination: 'register.yaml' },
+			{ id: 'payment-provider-flap', owner: 'Payments team', severity: 'sev-2', runbook: 'rb-payment-provider', recordDestination: 'register.yaml' },
+			{ id: 'storefront-latency', owner: 'Storefront team', severity: 'sev-3', runbook: 'rb-storefront-5xx', recordDestination: 'register.yaml' },
+		],
+	},
+	alertsRegister: {
+		owner: 'Storefront team',
+		reviewedOn: '2026-10-19',
+		firedAlerts: [
+			{ alert: 'storefront-5xx-rate', firedOn: '2026-09-30' },
+			{ alert: 'storefront-5xx-rate', firedOn: '2026-10-08' },
+			{ alert: 'payment-provider-flap', firedOn: '2026-10-12' },
+		],
+		incidents: [
+			{
+				id: 'INC-2026-038',
+				detectedOn: '2026-09-30',
+				severity: 'sev-1',
+				record: 'INC-2026-038 in the incident register',
+				alerts: ['storefront-5xx-rate'],
+				postmortem: [
+					{ id: 'act-038-1', action: 'Remove order_id from the storefront_requests_total labels', closedOn: '2026-10-11', verifiedBy: 'PR #2141 merged; the export shows no order_id label' },
+				],
+			},
+			{ id: 'INC-2026-041', detectedOn: '2026-10-08', severity: 'sev-2', record: 'INC-2026-041 in the incident register', alerts: ['storefront-5xx-rate'], postmortem: [] },
+			{ id: 'INC-2026-043', detectedOn: '2026-10-12', severity: 'sev-2', record: 'INC-2026-043 in the incident register', alerts: ['payment-provider-flap'], postmortem: [] },
 		],
 	},
 	actionsRegistry: {
@@ -537,7 +588,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'actions';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -551,6 +602,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('obs-contracts'), examples.obsContracts],
 			[editor('obs-runtime'), examples.obsRuntime],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'alerts') {
+		for (const [el, value] of [
+			[editor('alerts-contract'), examples.alertsContract],
+			[editor('alerts-register'), examples.alertsRegister],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -632,6 +690,28 @@ function renderObs(result) {
 		row.textContent = m.metric + '  ' +
 			m.labels.map((l) => `${l.label}×${l.distinct}`).join(' · ') +
 			`  = ${m.product} combinations`;
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
+function renderAlerts(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'linkages';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' one row per fired alert: where the page landed';
+	card.append(chip, title);
+	for (const l of result.linkages) {
+		const row = document.createElement('p');
+		row.className = 'summary';
+		row.textContent = l.alert + '  →  ' +
+			(l.record === null ? 'NO RECORD' : l.record);
+		if (l.record === null) row.className = 'msg';
 		card.append(row);
 	}
 	findingsBox.append(card);
@@ -736,6 +816,18 @@ validateBtn.addEventListener('click', async () => {
 			return;
 		}
 		input = { request: req.value, policySet: ps.value };
+	} else if (active === 'alerts') {
+		const contract = parseEditor('alerts-contract');
+		const register = parseEditor('alerts-register');
+		if (contract.error) {
+			setStatus('Alerting contract: ' + contract.error, true);
+			return;
+		}
+		if (register.error) {
+			setStatus('Incident register: ' + register.error, true);
+			return;
+		}
+		input = { alerting: contract.value, register: register.value, today: '2026-10-20' };
 	} else {
 		const parsed = parseEditor(active);
 		if (parsed.error) {
@@ -771,6 +863,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderObs(result);
 			}
+		} else if (active === 'alerts') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.linkages)) {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderAlerts(result);
+			}
 		} else if (active === 'actions') {
 			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.scoping)) {
 				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
@@ -798,6 +896,9 @@ exampleBtn.addEventListener('click', () => {
 	} else if (active === 'obs') {
 		editor('obs-contracts').value = JSON.stringify(examples.obsContracts, null, 2);
 		editor('obs-runtime').value = JSON.stringify(examples.obsRuntime, null, 2);
+	} else if (active === 'alerts') {
+		editor('alerts-contract').value = JSON.stringify(examples.alertsContract, null, 2);
+		editor('alerts-register').value = JSON.stringify(examples.alertsRegister, null, 2);
 	} else if (active === 'actions') {
 		editor('actions-registry').value = JSON.stringify(examples.actionsRegistry, null, 2);
 		editor('actions-manifest').value = JSON.stringify(examples.actionsManifest, null, 2);
