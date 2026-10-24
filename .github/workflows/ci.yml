@@ -9,10 +9,13 @@ on:
 # Two deploy mechanisms must not fight over the Pages deployment:
 # the old Jekyll scaffold was removed in favor of this workflow, which
 # builds the playground and deploys it through the official Pages actions.
+# TEMPORARY DIAGNOSTICS VERSION (will be reverted): captures early-step
+# output to /tmp/diag.log and posts it as a PR comment when the job fails.
 permissions:
   contents: read
   pages: write
   id-token: write
+  pull-requests: write
 
 concurrency:
   group: "pages"
@@ -28,17 +31,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Post-checkout probe
+        run: |
+          {
+            echo '=== post-checkout probe ==='
+            pwd
+            ls -la
+            git log -1 --format='%H %s'
+            git rev-parse HEAD
+            ls -la policies | head -5
+          } > /tmp/diag.log 2>&1 || true
+
       - name: Install OPA
         run: |
-          curl -sSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
-          sudo install -m 755 opa /usr/local/bin/opa
-          opa version
+          {
+            echo '=== Install OPA ==='
+            set -x
+            curl -sSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+            ls -l opa
+            head -c 16 opa | od -An -tx1 || true
+            sudo install -m 755 opa /usr/local/bin/opa
+            opa version
+            echo 'OPA-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Install yq
         run: |
-          curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-          sudo install -m 755 yq /usr/local/bin/yq
-          yq --version
+          {
+            echo '=== Install yq ==='
+            set -x
+            curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            ls -l yq
+            head -c 16 yq | od -An -tx1 || true
+            sudo install -m 755 yq /usr/local/bin/yq
+            yq --version
+            echo 'YQ-OK'
+          } >> /tmp/diag.log 2>&1
 
       - name: Format check
         run: opa fmt --fail -l policies
@@ -63,6 +91,20 @@ jobs:
 
       - name: Assemble playground
         run: make site
+
+      - name: Diagnostics on failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo '**CI diagnostics - temporary step, will be reverted**'
+            echo '```'
+            tail -n 200 /tmp/diag.log 2>/dev/null || echo '(diag log missing - failure happened before the probe step)'
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md || true
 
       - name: Setup Pages
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
