@@ -231,7 +231,7 @@ check-alerts:
 	@test -f "$(ALERTING)" || { echo "usage: make check-alerts [ALERTING=...] [TODAY=YYYY-MM-DD]"; exit 2; }
 	@mkdir -p build
 	yq -o=json '.' '$(ALERTING)' \
-		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], today: $today}' \
+		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], today: $$today}' \
 		| $(OPA) eval -d policies -I 'data.alerts.validate' --format=pretty | tee build/check-alerts.json
 	@jq -e '.valid == true' build/check-alerts.json > /dev/null \
 		|| { echo "check-alerts: the alerting contract is invalid — findings above"; exit 1; }
@@ -244,7 +244,7 @@ alerts-gate:
 	@test -f "$(ALERTING)" || { echo "usage: make alerts-gate [ALERTING=... REGISTER=...] [TODAY=YYYY-MM-DD]"; exit 2; }
 	@mkdir -p build
 	yq -o=json '.' '$(ALERTING)' '$(REGISTER)' \
-		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], register: .[1], today: $today}' \
+		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], register: .[1], today: $$today}' \
 		| $(OPA) eval -d policies -I 'data.alerts.gate' --format=pretty | tee build/alerts-gate.json
 	@jq -e '.valid == true' build/alerts-gate.json > /dev/null \
 		|| { echo "alerts-gate: the alert-to-record gate found errors above"; exit 1; }
