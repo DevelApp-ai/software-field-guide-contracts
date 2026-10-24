@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -162,6 +162,7 @@
 		<button role="tab" id="tab-authz" aria-selected="false">Authz explainer</button>
 		<button role="tab" id="tab-obs" aria-selected="false">Obs linter</button>
 		<button role="tab" id="tab-alerts" aria-selected="false">Alert gate</button>
+		<button role="tab" id="tab-actions" aria-selected="false">Action scope</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -203,6 +204,14 @@
 		<textarea id="editor-alerts-register" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-actions">
+		<p class="hint">Gate an <strong>agent manifest</strong> against the <strong>action registry</strong> — the micro-action vocabulary (named, typed, parameter-checked actions with execution envelopes under the platform ceilings, confirmation pinned to the severity classification) and the default-deny grants that claim it. The left editor holds the registry; the right one holds the manifest: agents pinned to rungs of the autonomy ladder, granted only declared actions, every argument scoped. Try the loaded example, then grant <code>archive-reader</code> the <code>file-draft-chargeback</code> action and watch the stage contradiction appear.</p>
+		<label for="editor-actions-registry">Action registry (micro-actions, envelopes, ceilings, servers)</label>
+		<textarea id="editor-actions-registry" spellcheck="false"></textarea>
+		<label for="editor-actions-manifest">Agent manifest (default-deny grants and argument scopes)</label>
+		<textarea id="editor-actions-manifest" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -218,7 +227,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough., <code>make actions-demo</code> for the action scope walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -229,6 +238,7 @@ const tabs = [
 	{ id: 'authz', pkg: 'authz' },
 	{ id: 'obs', pkg: 'obs' },
 	{ id: 'alerts', pkg: 'alerts' },
+	{ id: 'actions', pkg: 'actions' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -413,6 +423,125 @@ const examples = {
 			{ id: 'INC-2026-043', detectedOn: '2026-10-12', severity: 'sev-2', record: 'INC-2026-043 in the incident register', alerts: ['payment-provider-flap'], postmortem: [] },
 		],
 	},
+	actionsRegistry: {
+		version: 1,
+		reviewedOn: '2026-10-01',
+		platformCeilings: { maxTimeoutSeconds: 600, maxMemoryMB: 2048 },
+		servers: [
+			{ name: 'invoice-service', approved: true },
+			{ name: 'courier-api', approved: false },
+		],
+		actions: [
+			{
+				id: 'fetch-invoice',
+				name: 'Fetch invoice',
+				description: 'Retrieve one invoice record from the registered invoice service',
+				type: 'ExternalServer',
+				parameters: [
+					{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+				],
+				outputs: { invoice: 'object' },
+				envelope: { timeoutSeconds: 120, maxMemoryMB: 512, useIsolation: false },
+				securityLevel: 'Low',
+				confirmation: 'auto-confirm',
+				effect: 'read',
+				server: { name: 'invoice-service', operation: 'getInvoice', mappings: { invoiceId: 'invoiceId' } },
+			},
+			{
+				id: 'summarize-invoice',
+				name: 'Summarize invoice',
+				description: 'Produce a plain-language summary of one invoice for the drafting agent',
+				type: 'AgenticPrompt',
+				parameters: [
+					{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+				],
+				outputs: { summary: 'string' },
+				envelope: { timeoutSeconds: 90, maxMemoryMB: 256, useIsolation: false },
+				securityLevel: 'Low',
+				confirmation: 'auto-confirm',
+				effect: 'read',
+			},
+			{
+				id: 'compile-quarterly-report',
+				name: 'Compile quarterly report',
+				description: 'Run the quarterly reporting script over the ledger in sidecar isolation',
+				type: 'PythonScript',
+				parameters: [
+					{ name: 'quarter', type: 'string', validation: { enumValues: ['Q1', 'Q2', 'Q3', 'Q4'] } },
+				],
+				outputs: { reportPath: 'string' },
+				envelope: { timeoutSeconds: 480, maxMemoryMB: 1024, useIsolation: true },
+				securityLevel: 'Standard',
+				confirmation: 'auto-confirm',
+				effect: 'read',
+			},
+			{
+				id: 'file-draft-chargeback',
+				name: 'File draft chargeback',
+				description: 'Draft a chargeback case for one disputed invoice and file it for review',
+				type: 'CSharpScript',
+				parameters: [
+					{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+					{ name: 'amount', type: 'number', validation: { minimum: 0 } },
+				],
+				outputs: { caseId: 'string' },
+				envelope: { timeoutSeconds: 300, maxMemoryMB: 1024, useIsolation: true },
+				securityLevel: 'High',
+				confirmation: 'confirm',
+				effect: 'write',
+			},
+			{
+				id: 'send-invoice-email',
+				name: 'Send invoice email',
+				description: 'Send one invoice to one recipient through the registered invoice service',
+				type: 'ExternalServer',
+				parameters: [
+					{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+					{ name: 'recipient', type: 'string', validation: { minLength: 1 } },
+				],
+				outputs: { messageId: 'string' },
+				envelope: { timeoutSeconds: 60, maxMemoryMB: 256, useIsolation: false },
+				securityLevel: 'Critical',
+				confirmation: 'confirm',
+				effect: 'write',
+				server: { name: 'invoice-service', operation: 'sendInvoiceEmail', mappings: { invoiceId: 'invoiceId', recipient: 'recipient' } },
+			},
+		],
+	},
+	actionsManifest: {
+		owner: 'Billing team',
+		reviewedOn: '2026-10-15',
+		agents: [
+			{
+				agent: 'invoice-drafting-agent',
+				stage: 'autonomous',
+				grants: [
+					{ action: 'fetch-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] },
+					{ action: 'summarize-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] },
+				],
+			},
+			{
+				agent: 'chargeback-agent',
+				stage: 'propose-only',
+				grants: [
+					{
+						action: 'file-draft-chargeback',
+						argumentScopes: [
+							{ parameter: 'invoiceId', pattern: 'INV-*' },
+							{ parameter: 'amount', pattern: '*' },
+						],
+					},
+				],
+			},
+			{
+				agent: 'archive-reader',
+				stage: 'read-only',
+				grants: [
+					{ action: 'fetch-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-2026-*' }] },
+				],
+			},
+		],
+	},
 };
 examples.bundle = {
 	enclaves: [examples.enclave, {
@@ -459,7 +588,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -480,6 +609,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('alerts-contract'), examples.alertsContract],
 			[editor('alerts-register'), examples.alertsRegister],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'actions') {
+		for (const [el, value] of [
+			[editor('actions-registry'), examples.actionsRegistry],
+			[editor('actions-manifest'), examples.actionsManifest],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -581,6 +717,27 @@ function renderAlerts(result) {
 	findingsBox.append(card);
 }
 
+function renderActions(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'scoping';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' one row per agent: what it may do, at which stage';
+	card.append(chip, title);
+	for (const s of result.scoping) {
+		const row = document.createElement('p');
+		row.className = 'summary';
+		row.textContent = s.agent + '  @ ' + s.stage + '  →  ' +
+			(s.actions.length ? s.actions.join(', ') : 'no grants');
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -635,6 +792,18 @@ validateBtn.addEventListener('click', async () => {
 			return;
 		}
 		input = { ...contracts.value, ...runtime.value, today: '2026-10-20', budgetFile: 'cardinality-budget.yaml' };
+	} else if (active === 'actions') {
+		const registry = parseEditor('actions-registry');
+		const manifest = parseEditor('actions-manifest');
+		if (registry.error) {
+			setStatus('Action registry: ' + registry.error, true);
+			return;
+		}
+		if (manifest.error) {
+			setStatus('Agent manifest: ' + manifest.error, true);
+			return;
+		}
+		input = { registry: registry.value, manifest: manifest.value, today: '2026-10-20' };
 	} else if (active === 'authz') {
 		const req = parseEditor('authz-request');
 		const ps = parseEditor('authz-policyset');
@@ -700,6 +869,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderAlerts(result);
 			}
+		} else if (active === 'actions') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.scoping)) {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderActions(result);
+			}
 		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
@@ -724,6 +899,9 @@ exampleBtn.addEventListener('click', () => {
 	} else if (active === 'alerts') {
 		editor('alerts-contract').value = JSON.stringify(examples.alertsContract, null, 2);
 		editor('alerts-register').value = JSON.stringify(examples.alertsRegister, null, 2);
+	} else if (active === 'actions') {
+		editor('actions-registry').value = JSON.stringify(examples.actionsRegistry, null, 2);
+		editor('actions-manifest').value = JSON.stringify(examples.actionsManifest, null, 2);
 	} else {
 		editor(active).value = JSON.stringify(examples[active], null, 2);
 	}
