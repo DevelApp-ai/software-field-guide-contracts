@@ -1,0 +1,37 @@
+# Agent permission manifest — The Software Field Guide, issue #70.
+#
+# The default-deny side of the same coin: three agents, each pinned to
+# a rung of the autonomy ladder, each granted only actions the registry
+# declares, each argument constrained by a scope pattern. Nothing on
+# this page is authority — it is a claim, judged against the registry
+# above it. Example dates are chosen relative to the CI anchor date
+# 2026-10-20.
+
+owner: Billing team
+reviewedOn: 2026-10-15
+
+agents:
+  - agent: invoice-drafting-agent
+    stage: autonomous
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+      - action: summarize-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+
+  - agent: chargeback-agent
+    stage: propose-only
+    grants:
+      - action: file-draft-chargeback
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-*"}
+          - {parameter: amount, pattern: "*"}
+
+  - agent: archive-reader
+    stage: read-only
+    grants:
+      - action: fetch-invoice
+        argumentScopes:
+          - {parameter: invoiceId, pattern: "INV-2026-*"}

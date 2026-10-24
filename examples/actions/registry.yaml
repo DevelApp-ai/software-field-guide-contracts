@@ -1,0 +1,99 @@
+# Action registry — The Software Field Guide, issue #70.
+#
+# The vocabulary the agents are allowed to speak: five micro-actions
+# across all four execution families, each named, typed, and checked —
+# parameters with types and validation objects, outputs, an execution
+# envelope under the platform ceilings, a security level, the
+# confirmation it demands, its effect on the estate, and, for external
+# calls, the registered server and its argument mappings. Example dates
+# are chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+
+# The platform ceilings: every envelope below is judged against these,
+# so an action cannot grant itself more time or memory than the host
+# is willing to give any action.
+platformCeilings:
+  maxTimeoutSeconds: 600
+  maxMemoryMB: 2048
+
+# Registered servers: an external call may only name one of these, and
+# only an approved one. courier-api is registered but unapproved — it is
+# referenced by nothing, which is the honest state.
+servers:
+  - name: invoice-service
+    approved: true
+  - name: courier-api
+    approved: false
+
+actions:
+  - id: fetch-invoice
+    name: Fetch invoice
+    description: Retrieve one invoice record from the registered invoice service
+    type: ExternalServer
+    parameters:
+      - {name: invoiceId, type: string, validation: {minLength: 1}}
+    outputs: {invoice: object}
+    envelope: {timeoutSeconds: 120, maxMemoryMB: 512, useIsolation: false}
+    securityLevel: Low
+    confirmation: auto-confirm
+    effect: read
+    server:
+      name: invoice-service
+      operation: getInvoice
+      mappings: {invoiceId: invoiceId}
+
+  - id: summarize-invoice
+    name: Summarize invoice
+    description: Produce a plain-language summary of one invoice for the drafting agent
+    type: AgenticPrompt
+    parameters:
+      - {name: invoiceId, type: string, validation: {minLength: 1}}
+    outputs: {summary: string}
+    envelope: {timeoutSeconds: 90, maxMemoryMB: 256, useIsolation: false}
+    securityLevel: Low
+    confirmation: auto-confirm
+    effect: read
+
+  - id: compile-quarterly-report
+    name: Compile quarterly report
+    description: Run the quarterly reporting script over the ledger in sidecar isolation
+    type: PythonScript
+    parameters:
+      - {name: quarter, type: string, validation: {enumValues: [Q1, Q2, Q3, Q4]}}
+    outputs: {reportPath: string}
+    envelope: {timeoutSeconds: 480, maxMemoryMB: 1024, useIsolation: true}
+    securityLevel: Standard
+    confirmation: auto-confirm
+    effect: read
+
+  - id: file-draft-chargeback
+    name: File draft chargeback
+    description: Draft a chargeback case for one disputed invoice and file it for review
+    type: CSharpScript
+    parameters:
+      - {name: invoiceId, type: string, validation: {minLength: 1}}
+      - {name: amount, type: number, validation: {minimum: 0}}
+    outputs: {caseId: string}
+    envelope: {timeoutSeconds: 300, maxMemoryMB: 1024, useIsolation: true}
+    securityLevel: High
+    confirmation: confirm
+    effect: write
+
+  - id: send-invoice-email
+    name: Send invoice email
+    description: Send one invoice to one recipient through the registered invoice service
+    type: ExternalServer
+    parameters:
+      - {name: invoiceId, type: string, validation: {minLength: 1}}
+      - {name: recipient, type: string, validation: {minLength: 1}}
+    outputs: {messageId: string}
+    envelope: {timeoutSeconds: 60, maxMemoryMB: 256, useIsolation: false}
+    securityLevel: Critical
+    confirmation: confirm
+    effect: write
+    server:
+      name: invoice-service
+      operation: sendInvoiceEmail
+      mappings: {invoiceId: invoiceId, recipient: recipient}
