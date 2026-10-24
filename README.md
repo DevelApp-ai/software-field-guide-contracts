@@ -6,6 +6,8 @@ It also implements the **authorization policy compiler** from [book issue #59](h
 
 And it implements the **observability vocabulary and cardinality linter** from [book issue #61](https://github.com/DevelApp-ai/software-field-guide/issues/61): telemetry names and labels are versioned contracts, a scanner lints instrumentation code against them, and a cardinality gate catches the label that breeds a metrics budget breach — citing the budget file it breaches.
 
+And it implements the **alert-to-record linkage gate** from [book issue #69](https://github.com/DevelApp-ai/software-field-guide/issues/69): alert rules are a versioned contract (a severity ladder with dated rungs, runbooks with escalation clocks, owners, and record destinations), and the gate answers the incident-to-action question — every fired alert must be claimed by a record in the incident register, or it pages nobody.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -21,10 +23,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `obs/lint` | an instrumentation scan against both vocabularies | `{"vocabulary": {...}, "labels": {...}, "scan": {...}}` |
 | `obs/gate` | a metrics export against the cardinality budget | `{"labels": {...}, "budget": {...}, "observations": [...], "budgetFile": "..."}` |
 | `obs/audit` | all three at once — one verdict, one findings list | the superset of the above (plus `"today"`) |
+| `alerts/validate` | one alerting contract alone | `{"alerting": {...}, "today": "YYYY-MM-DD"}` |
+| `alerts/gate` | an incident register against the alerting contract | `{"alerting": {...}, "register": {...}, "today": "YYYY-MM-DD"}` |
+| `alerts/audit` | both at once — one verdict, one findings list, one linkage map | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.3** — the estate/seam formats, the authorization compiler, and the observability linter work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.4** — the estate/seam formats, the authorization compiler, the observability linter, and the alert-to-record gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -206,6 +211,73 @@ make obs-demo
 #      the cardinality budget total is 4000 (cardinality-budget.with-order-id.yaml)"
 ```
 
+## The alert-to-record linkage gate
+
+Where the observability linter judges telemetry shape, the alert gate judges the **incident-to-action loop**: an alert that fires and lands in no record is a page nobody answered, and a postmortem action nobody verified closed is a promise nobody kept. Both the alerting contract and the incident register are versioned, owned, reviewed documents — like the budget and the policy set before them.
+
+### The alerting contract and the register
+
+```yaml
+# alerting.yaml — alert rules are versioned, like code
+version: 1
+reviewedOn: 2026-10-01
+severityLadder:            # each rung is dated: defined before it fires
+  - {name: sev-3, description: Low-impact degradation, definedOn: 2026-01-15}
+  - {name: sev-2, description: A customer-visible promise is degraded, definedOn: 2026-01-15}
+  - {name: sev-1, description: Estate-wide incident, definedOn: 2026-06-01}
+runbooks:                  # each runbook carries its escalation clock
+  - id: rb-storefront-5xx
+    link: https://example/runbooks/storefront-5xx.md
+    escalationClock: Acknowledge in 15 minutes; escalate to the storefront on-call lead at 60
+alerts:                   # every alert has an owner, a rung, a runbook, and a destination
+  - {id: storefront-5xx-rate, owner: Storefront team, severity: sev-2,
+     runbook: rb-storefront-5xx, recordDestination: register.yaml}
+
+# register.yaml — the incident register is owned and reviewed, like the budget
+owner: Storefront team
+reviewedOn: 2026-10-19
+firedAlerts:              # what actually fired
+  - {alert: storefront-5xx-rate, firedOn: 2026-09-30}
+incidents:                # what the fires landed in
+  - id: INC-2026-038
+    detectedOn: 2026-09-30
+    severity: sev-1
+    record: INC-2026-038 in the incident register
+    alerts: [storefront-5xx-rate]
+    postmortem:           # every action closed AND verified
+      - {id: act-038-1, action: Remove order_id from the labels,
+         closedOn: 2026-10-11, verifiedBy: "PR #2141 merged; the export shows no order_id label"}
+```
+
+See [examples/alerting/](examples/alerting/) for the complete example pair and [schemas/](schemas/) for the two JSON Schema drafts.
+
+### What the gate enforces and proves
+
+- **Contract validation** (`alerts/validate`): a versioned, reviewed alerting document; a severity ladder of dated, described, uniquely named rungs; runbooks with links and escalation clocks; alert rules with owners, on-ladder severities, known runbooks, and a record destination. A runbook no alert references is a warning, not an error — it may be a runbook waiting for its alert.
+- **Alert-to-record linkage** (`alerts/gate`): every alert that fired must be claimed by an incident — `alerts/no-record-linkage` names the alert that landed in no record. The result carries a linkage map, one row per distinct fired alert: the alert and the record it landed in, or no record.
+- **Severity honesty** (`alerts/gate`): an incident's severity must be a rung on the ladder (`gate/severity-off-ladder`), and a rung only counts if it was defined *before* the incident was detected (`gate/severity-defined-after-detection`) — you cannot file an incident as sev-1 when sev-1 was invented after the fire.
+- **Closure verification** (`alerts/gate`): every postmortem action is closed on a real date *and* verified by named evidence (`gate/action-unverified`). An empty postmortem is honest — an open incident is still being worked — the gate verifies the actions that exist, it does not demand a postmortem on day one.
+- **Owned and re-read** (both): the register carries an owner and a `reviewedOn` stamp within 365 days, like every other owned document in this repo.
+
+The done-when proof from book issue #69 — an unlinked alert caught by construction — runs as a single target:
+
+```sh
+make alerts-demo
+# → 1. the alerting contract validates
+#   2. the seeded register passes the alert-to-record gate
+#   3. a runbook without its escalation clock is caught at contract time:
+#      runbook/escalation-clock-required
+#   4. an alert that fired without a record is caught:
+#      alerts/no-record-linkage — "alert 'storefront-latency' fired on
+#      2026-10-15 but links to no record in the incident register:
+#      nothing pages without creating a record"
+#   5. a severity off the ladder is caught: gate/severity-off-ladder
+#   6. a severity defined after the incident is caught:
+#      gate/severity-defined-after-detection
+#   7. a postmortem action without closure verification is caught:
+#      gate/action-unverified
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -218,6 +290,8 @@ make check-authz   FILE=examples/authz/storefront.yaml TODAY=2026-10-20
 make check-obs     TODAY=2026-10-20          # vocabulary + label schema + budget
 make obs-lint                               # scan demo sources against the contracts
 make obs-gate                               # gate the demo metrics export
+make check-alerts TODAY=2026-10-20          # the alerting contract alone
+make alerts-gate   TODAY=2026-10-20         # the register against the contract
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -228,7 +302,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -241,15 +315,17 @@ The playground imports the opa-wasm runtime from [site/vendor/](site/vendor/) �
 policies/estate/    enclave.rego, seam.rego, cross.rego, lib.rego
 policies/authz/     lib, model, policy, decide, retro, disabled
 policies/obs/       lib, model, policy, lint, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs)
+policies/alerts/     lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set,
-                    and the observability demo (contracts + instrumented sources)
+                    the observability demo (contracts + instrumented sources),
+                    and the alerting demo (contract + incident register)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -261,6 +337,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-* target
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
 - **CI proves the browser path.** `make e2e` runs the five `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
+- **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
 
 ## License
 

@@ -24,6 +24,12 @@
 #                      [SCHEMA=... BUDGET=... EXPORT=...]
 #   make obs-demo      the done-when proof: a budget-breeding label caught
 #                      with the budget file cited (runs the whole demo)
+#   make check-alerts validate the alerting contract (severity ladder, runbooks,
+#                      alert rules) [ALERTING=...] [TODAY=YYYY-MM-DD]
+#   make alerts-gate  gate an incident register against the alerting contract
+#                      [ALERTING=... REGISTER=...] [TODAY=YYYY-MM-DD]
+#   make alerts-demo  the done-when proof: an unlinked alert caught with the
+#                      alert and register cited (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -44,11 +50,14 @@ SCHEMA ?= examples/observability/label-schema.yaml
 BUDGET ?= examples/observability/cardinality-budget.yaml
 SCAN_SRC ?= examples/observability/demo/src/storefront.py examples/observability/demo/src/payments.py
 EXPORT ?= examples/observability/demo/metrics-export.json
+ALERTING ?= examples/alerting/alerting.yaml
+REGISTER ?= examples/alerting/register.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
 	explain-authz who-could-access authz-disabled \
 	check-obs obs-lint obs-gate obs-demo \
+	check-alerts alerts-gate alerts-demo \
 	examples ci
 
 fmt:
@@ -78,6 +87,9 @@ build:
 	$(OPA) build -t wasm -e obs/audit -o build/obs.tar.gz policies
 	tar -xzf build/obs.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/obs.wasm
+	$(OPA) build -t wasm -e alerts/audit -o build/alerts.tar.gz policies
+	tar -xzf build/alerts.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/alerts.wasm
 
 site: build
 	rm -rf site-build
@@ -213,6 +225,77 @@ obs-demo:
 	@echo "caught as expected: budget/label-over-allocation and budget/metric-total-exceeded citing the budget file"
 	@echo "--- obs demo: all done-when proofs passed ---"
 
+# Alerts: validate the alerting contract (severity ladder with definedOn
+# dates, runbooks with escalation clocks, alert rules with owners) alone.
+check-alerts:
+	@test -f "$(ALERTING)" || { echo "usage: make check-alerts [ALERTING=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ALERTING)' \
+		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], today: $today}' \
+		| $(OPA) eval -d policies -I 'data.alerts.validate' --format=pretty | tee build/check-alerts.json
+	@jq -e '.valid == true' build/check-alerts.json > /dev/null \
+		|| { echo "check-alerts: the alerting contract is invalid — findings above"; exit 1; }
+
+# Gate the incident register against the alerting contract: every fired
+# alert must be claimed by an incident record, severities must be on the
+# ladder as it stood at detection time, and postmortem actions must be
+# verified closed. Fails (exit 1) when the gate finds errors.
+alerts-gate:
+	@test -f "$(ALERTING)" || { echo "usage: make alerts-gate [ALERTING=... REGISTER=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ALERTING)' '$(REGISTER)' \
+		| jq -cs --arg today "$(TODAY)" '{alerting: .[0], register: .[1], today: $today}' \
+		| $(OPA) eval -d policies -I 'data.alerts.gate' --format=pretty | tee build/alerts-gate.json
+	@jq -e '.valid == true' build/alerts-gate.json > /dev/null \
+		|| { echo "alerts-gate: the alert-to-record gate found errors above"; exit 1; }
+
+# The done-when proof for book issue #69: an unlinked alert is caught with
+# the alert and the register cited. Runs the good pair end to end, then
+# proves all five broken variants fail loudly.
+alerts-demo:
+	@echo "--- 1. the alerting contract validates ---"
+	@$(MAKE) check-alerts TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the seeded register passes the alert-to-record gate ---"
+	@$(MAKE) alerts-gate TODAY=$(ANCHOR_TODAY)
+	@echo "--- 3. a runbook without its escalation clock is caught at contract time ---"
+	@if $(MAKE) check-alerts ALERTING=examples/alerting/broken/alerting.no-escalation-clock.yaml TODAY=$(ANCHOR_TODAY) > build/alerts-no-clock.txt 2>&1; \
+		then echo "FAIL: the missing escalation clock was not caught"; cat build/alerts-no-clock.txt; exit 1; \
+		else grep -q 'runbook/escalation-clock-required' build/alerts-no-clock.txt \
+			|| { echo "FAIL: the contract failed without the escalation-clock rule"; cat build/alerts-no-clock.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: runbook/escalation-clock-required"
+	@echo "--- 4. an alert that fired without a record is caught ---"
+	@if $(MAKE) alerts-gate REGISTER=examples/alerting/broken/register.unlinked-alert.yaml TODAY=$(ANCHOR_TODAY) > build/alerts-unlinked.txt 2>&1; \
+		then echo "FAIL: the unlinked alert was not caught"; cat build/alerts-unlinked.txt; exit 1; \
+		else grep -q 'alerts/no-record-linkage' build/alerts-unlinked.txt \
+			|| { echo "FAIL: the gate failed without the record-linkage rule"; cat build/alerts-unlinked.txt; exit 1; }; \
+		fi
+	@grep -q 'storefront-latency' build/alerts-unlinked.txt \
+		|| { echo "FAIL: the finding does not name the unlinked alert"; cat build/alerts-unlinked.txt; exit 1; }
+	@echo "caught as expected: alerts/no-record-linkage naming storefront-latency"
+	@echo "--- 5. a severity off the ladder is caught ---"
+	@if $(MAKE) alerts-gate REGISTER=examples/alerting/broken/register.off-ladder.yaml TODAY=$(ANCHOR_TODAY) > build/alerts-off-ladder.txt 2>&1; \
+		then echo "FAIL: the off-ladder severity was not caught"; cat build/alerts-off-ladder.txt; exit 1; \
+		else grep -q 'gate/severity-off-ladder' build/alerts-off-ladder.txt \
+			|| { echo "FAIL: the gate failed without the severity-ladder rule"; cat build/alerts-off-ladder.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: gate/severity-off-ladder"
+	@echo "--- 6. a severity defined after the incident is caught ---"
+	@if $(MAKE) alerts-gate ALERTING=examples/alerting/broken/alerting.late-ladder.yaml TODAY=$(ANCHOR_TODAY) > build/alerts-late-ladder.txt 2>&1; \
+		then echo "FAIL: the late ladder was not caught"; cat build/alerts-late-ladder.txt; exit 1; \
+		else grep -q 'gate/severity-defined-after-detection' build/alerts-late-ladder.txt \
+			|| { echo "FAIL: the gate failed without the severity-timing rule"; cat build/alerts-late-ladder.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: gate/severity-defined-after-detection"
+	@echo "--- 7. a postmortem action without closure verification is caught ---"
+	@if $(MAKE) alerts-gate REGISTER=examples/alerting/broken/register.unverified-action.yaml TODAY=$(ANCHOR_TODAY) > build/alerts-unverified.txt 2>&1; \
+		then echo "FAIL: the unverified action was not caught"; cat build/alerts-unverified.txt; exit 1; \
+		else grep -q 'gate/action-unverified' build/alerts-unverified.txt \
+			|| { echo "FAIL: the gate failed without the action-verification rule"; cat build/alerts-unverified.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: gate/action-unverified"
+	@echo "--- alerts demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -222,7 +305,9 @@ examples:
 	$(MAKE) check-bundle FILE=examples/bundle.yaml
 	$(MAKE) check-authz FILE=examples/authz/storefront.yaml TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-obs TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-alerts TODAY=$(ANCHOR_TODAY)
+	$(MAKE) alerts-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo
+ci: check test examples e2e obs-demo alerts-demo
 	$(OPA) fmt --fail -l policies
