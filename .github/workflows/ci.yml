@@ -55,6 +55,9 @@ jobs:
       - name: Observability cardinality demo
         run: make obs-demo
 
+      - name: Alert-to-record linkage demo
+        run: make alerts-demo
+
       - name: Action registry scoping demo
         run: make actions-demo
 

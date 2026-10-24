@@ -1,0 +1,25 @@
+# The broken contract: the payments runbook lost its escalation clock.
+#
+# The quiet half of the discipline debt: the runbook still exists, the
+# link still resolves, but "who escalates, by when" is gone — and a
+# runbook without its clock is a wiki page, not a runbook. The
+# validator must catch it at PR time with the runbook cited.
+version: 1
+reviewedOn: 2026-10-01
+
+severityLadder:
+  - {name: sev-3, description: Low-impact degradation on one team's surface; no customer promise broken, definedOn: 2026-01-15}
+  - {name: sev-2, description: A customer-visible promise is degraded; the on-call lead coordinates the response, definedOn: 2026-01-15}
+  - {name: sev-1, description: Estate-wide incident; the incident commander takes the bridge, definedOn: 2026-06-01}
+
+runbooks:
+  - id: rb-storefront-5xx
+    link: https://github.com/DevelApp-ai/runbooks/blob/main/storefront-5xx.md
+    escalationClock: Acknowledge in 15 minutes; escalate to the storefront on-call lead at 60
+  - id: rb-payment-provider
+    link: https://github.com/DevelApp-ai/runbooks/blob/main/payment-provider.md
+
+alerts:
+  - {id: storefront-5xx-rate, owner: Storefront team, severity: sev-2, runbook: rb-storefront-5xx, recordDestination: examples/alerting/register.yaml}
+  - {id: payment-provider-flap, owner: Payments team, severity: sev-2, runbook: rb-payment-provider, recordDestination: examples/alerting/register.yaml}
+  - {id: storefront-latency, owner: Storefront team, severity: sev-3, runbook: rb-storefront-5xx, recordDestination: examples/alerting/register.yaml}
