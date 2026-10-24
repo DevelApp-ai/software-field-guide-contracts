@@ -1,0 +1,81 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/actions-manifest.schema.json",
+	"title": "Agent permission manifest",
+	"description": "The default-deny side of the action scope validator, as defined in The Software Field Guide, issue #70: named agents pinned to rungs of the autonomy ladder, each granted only actions the registry declares and each argument constrained by a scope pattern. Nothing on this page is authority — it is a claim, judged against the registry. This schema mirrors the shape rules of the Rego validator (policies/actions); the validator additionally enforces the semantic rules a JSON schema cannot — agent names unique, grants per agent unique, granted actions actually declared in the registry (a grant for an undeclared action is a phantom), argument scopes naming parameters the granted action actually declares, stages that do not contradict the granted effects (a read-only agent may hold no write), a quarantined agent holding no grants at all, and reviews not older than 365 days nor in the future.",
+	"type": "object",
+	"required": ["owner", "reviewedOn", "agents"],
+	"additionalProperties": true,
+	"properties": {
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Who owns the manifest and answers for what the agents may do. Permissions nobody owns are nobody's permissions."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the manifest was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"agents": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The agents and what they are allowed to do. Absent from this page means denied — the manifest is a claim, not a constitution.",
+			"items": {
+				"type": "object",
+				"required": ["agent", "stage", "grants"],
+				"additionalProperties": true,
+				"properties": {
+					"agent": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The agent's name. Unique across the manifest."
+					},
+					"stage": {
+						"type": "string",
+						"enum": ["autonomous", "propose-only", "read-only", "quarantined"],
+						"description": "The agent's rung on the autonomy ladder. Closed vocabulary. A read-only agent granted a write, or a quarantined agent granted anything, contradicts its stage."
+					},
+					"grants": {
+						"type": "array",
+						"description": "The actions this agent may perform. Each names a registry-declared action and constrains its arguments with scope patterns.",
+						"items": {
+							"type": "object",
+							"required": ["action", "argumentScopes"],
+							"additionalProperties": true,
+							"properties": {
+								"action": {
+									"type": "string",
+									"minLength": 1,
+									"description": "The granted action id. Must be declared in the action registry — a grant for an undeclared action is a hope wearing a permission's clothes."
+								},
+								"argumentScopes": {
+									"type": "array",
+									"minItems": 1,
+									"description": "The argument scoping for the granted action. Each scope names a parameter the action declares and a pattern the runtime must check the value against.",
+									"items": {
+										"type": "object",
+										"required": ["parameter", "pattern"],
+										"additionalProperties": true,
+										"properties": {
+											"parameter": {
+												"type": "string",
+												"minLength": 1,
+												"description": "The parameter this scope constrains. Must be declared by the granted action."
+											},
+											"pattern": {
+												"type": "string",
+												"minLength": 1,
+												"description": "The glob pattern the argument value must match at call time — e.g. 'INV-2026-*'. An unscoped argument is unscoped authority."
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
