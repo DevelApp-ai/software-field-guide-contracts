@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the five wasm bundles into build/wasm/
+#   make build         compile the six wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -24,6 +24,12 @@
 #                      [SCHEMA=... BUDGET=... EXPORT=...]
 #   make obs-demo      the done-when proof: a budget-breeding label caught
 #                      with the budget file cited (runs the whole demo)
+#   make check-actions validate the action registry (micro-actions, envelopes,
+#                      ceilings, servers) [ACTIONS_REGISTRY=...] [TODAY=...]
+#   make actions-gate  gate an agent manifest against the action registry
+#                      [ACTIONS_REGISTRY=... ACTIONS_MANIFEST=...] [TODAY=...]
+#   make actions-demo  the done-when proof: a phantom grant caught with the
+#                      manifest cited (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -44,11 +50,14 @@ SCHEMA ?= examples/observability/label-schema.yaml
 BUDGET ?= examples/observability/cardinality-budget.yaml
 SCAN_SRC ?= examples/observability/demo/src/storefront.py examples/observability/demo/src/payments.py
 EXPORT ?= examples/observability/demo/metrics-export.json
+ACTIONS_REGISTRY ?= examples/actions/registry.yaml
+ACTIONS_MANIFEST ?= examples/actions/manifest.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
 	explain-authz who-could-access authz-disabled \
 	check-obs obs-lint obs-gate obs-demo \
+	check-actions actions-gate actions-demo \
 	examples ci
 
 fmt:
@@ -78,6 +87,9 @@ build:
 	$(OPA) build -t wasm -e obs/audit -o build/obs.tar.gz policies
 	tar -xzf build/obs.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/obs.wasm
+	$(OPA) build -t wasm -e actions/audit -o build/actions.tar.gz policies
+	tar -xzf build/actions.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/actions.wasm
 
 site: build
 	rm -rf site-build
@@ -213,6 +225,85 @@ obs-demo:
 	@echo "caught as expected: budget/label-over-allocation and budget/metric-total-exceeded citing the budget file"
 	@echo "--- obs demo: all done-when proofs passed ---"
 
+# Actions: validate the action registry (named, typed, parameter-checked
+# micro-actions under the platform ceilings) alone.
+check-actions:
+	@test -f "$(ACTIONS_REGISTRY)" || { echo "usage: make check-actions [ACTIONS_REGISTRY=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ACTIONS_REGISTRY)' \
+		| jq -cs --arg today "$(TODAY)" '{registry: .[0], today: $today}' \
+		| $(OPA) eval -d policies -I 'data.actions.validate' --format=pretty | tee build/check-actions.json
+	@jq -e '.valid == true' build/check-actions.json > /dev/null \
+		|| { echo "check-actions: the action registry is invalid — findings above"; exit 1; }
+
+# Gate the agent manifest against the action registry: every grant names
+# a declared action, every argument scope constrains a declared
+# parameter, and no stage contradicts the effects it grants. Fails
+# (exit 1) when the gate finds errors.
+actions-gate:
+	@test -f "$(ACTIONS_REGISTRY)" || { echo "usage: make actions-gate [ACTIONS_REGISTRY=... ACTIONS_MANIFEST=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ACTIONS_REGISTRY)' '$(ACTIONS_MANIFEST)' \
+		| jq -cs --arg today "$(TODAY)" '{registry: .[0], manifest: .[1], today: $today}' \
+		| $(OPA) eval -d policies -I 'data.actions.gate' --format=pretty | tee build/actions-gate.json
+	@jq -e '.valid == true' build/actions-gate.json > /dev/null \
+		|| { echo "actions-gate: the action scope gate found errors above"; exit 1; }
+
+# The done-when proof for book issue #70: a phantom grant is caught with
+# the agent and the undeclared action cited. Runs the good pair end to
+# end, then proves all five broken variants fail loudly.
+actions-demo:
+	@echo "--- 1. the action registry validates ---"
+	@$(MAKE) check-actions TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the seeded manifest passes the action scope gate ---"
+	@$(MAKE) actions-gate TODAY=$(ANCHOR_TODAY)
+	@echo "--- 3. an untyped parameter is caught at contract time ---"
+	@if $(MAKE) check-actions ACTIONS_REGISTRY=examples/actions/broken/registry.untyped-parameter.yaml TODAY=$(ANCHOR_TODAY) > build/actions-untyped.txt 2>&1; \
+		then echo "FAIL: the untyped parameter was not caught"; cat build/actions-untyped.txt; exit 1; \
+		else grep -q 'action/parameter-untyped' build/actions-untyped.txt \
+			|| { echo "FAIL: the registry failed without the untyped-parameter rule"; cat build/actions-untyped.txt; exit 1; }; \
+		fi
+	@grep -q 'invoiceId' build/actions-untyped.txt \
+		|| { echo "FAIL: the finding does not name the parameter"; cat build/actions-untyped.txt; exit 1; }
+	@echo "caught as expected: action/parameter-untyped naming invoiceId"
+	@echo "--- 4. an envelope that exceeds the platform ceiling is caught ---"
+	@if $(MAKE) check-actions ACTIONS_REGISTRY=examples/actions/broken/registry.envelope-breach.yaml TODAY=$(ANCHOR_TODAY) > build/actions-envelope.txt 2>&1; \
+		then echo "FAIL: the envelope breach was not caught"; cat build/actions-envelope.txt; exit 1; \
+		else grep -q 'envelope/exceeds-ceiling' build/actions-envelope.txt \
+			|| { echo "FAIL: the registry failed without the ceiling rule"; cat build/actions-envelope.txt; exit 1; }; \
+		fi
+	@grep -q 'compile-quarterly-report' build/actions-envelope.txt \
+		|| { echo "FAIL: the finding does not name the action"; cat build/actions-envelope.txt; exit 1; }
+	@echo "caught as expected: envelope/exceeds-ceiling naming compile-quarterly-report"
+	@echo "--- 5. a Critical action that no longer asks is caught ---"
+	@if $(MAKE) check-actions ACTIONS_REGISTRY=examples/actions/broken/registry.autoconfirm-critical.yaml TODAY=$(ANCHOR_TODAY) > build/actions-autoconfirm.txt 2>&1; \
+		then echo "FAIL: the auto-confirmed Critical action was not caught"; cat build/actions-autoconfirm.txt; exit 1; \
+		else grep -q 'action/confirm-required-at-level' build/actions-autoconfirm.txt \
+			|| { echo "FAIL: the registry failed without the confirmation rule"; cat build/actions-autoconfirm.txt; exit 1; }; \
+		fi
+	@grep -q 'send-invoice-email' build/actions-autoconfirm.txt \
+		|| { echo "FAIL: the finding does not name the action"; cat build/actions-autoconfirm.txt; exit 1; }
+	@echo "caught as expected: action/confirm-required-at-level naming send-invoice-email"
+	@echo "--- 6. a grant for an action the registry never declared is caught ---"
+	@if $(MAKE) actions-gate ACTIONS_MANIFEST=examples/actions/broken/manifest.phantom-grant.yaml TODAY=$(ANCHOR_TODAY) > build/actions-phantom.txt 2>&1; \
+		then echo "FAIL: the phantom grant was not caught"; cat build/actions-phantom.txt; exit 1; \
+		else grep -q 'manifest/action-unknown' build/actions-phantom.txt \
+			|| { echo "FAIL: the gate failed without the phantom-grant rule"; cat build/actions-phantom.txt; exit 1; }; \
+		fi
+	@grep -q 'purge-invoice-archive' build/actions-phantom.txt \
+		|| { echo "FAIL: the finding does not name the undeclared action"; cat build/actions-phantom.txt; exit 1; }
+	@echo "caught as expected: manifest/action-unknown naming purge-invoice-archive"
+	@echo "--- 7. a read-only agent granted a write is caught ---"
+	@if $(MAKE) actions-gate ACTIONS_MANIFEST=examples/actions/broken/manifest.readonly-writer.yaml TODAY=$(ANCHOR_TODAY) > build/actions-readonly.txt 2>&1; \
+		then echo "FAIL: the stage contradiction was not caught"; cat build/actions-readonly.txt; exit 1; \
+		else grep -q 'manifest/stage-contradiction' build/actions-readonly.txt \
+			|| { echo "FAIL: the gate failed without the stage-contradiction rule"; cat build/actions-readonly.txt; exit 1; }; \
+		fi
+	@grep -q 'archive-reader' build/actions-readonly.txt \
+		|| { echo "FAIL: the finding does not name the agent"; cat build/actions-readonly.txt; exit 1; }
+	@echo "caught as expected: manifest/stage-contradiction naming archive-reader"
+	@echo "--- actions demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -222,7 +313,9 @@ examples:
 	$(MAKE) check-bundle FILE=examples/bundle.yaml
 	$(MAKE) check-authz FILE=examples/authz/storefront.yaml TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-obs TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-actions TODAY=$(ANCHOR_TODAY)
+	$(MAKE) actions-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo
+ci: check test examples e2e obs-demo actions-demo
 	$(OPA) fmt --fail -l policies

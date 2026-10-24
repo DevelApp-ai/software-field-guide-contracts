@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the five policy.wasm builds and evaluates
+// End-to-end smoke test: loads the six policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -217,6 +217,7 @@ const obsBreachObservations = [
 ]
 
 const obsPolicy = await load('obs')
+const actionsPolicy = await load('actions')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -373,5 +374,214 @@ assert(
 	'the over-allocation finding cites the exact budget allocation and file',
 )
 assert(r.cardinalities[0].product === 178192, 'the audit reports the honest product of observed distinct values')
+
+
+// --- actions (mirror the unit-test fixture) ---------------------------------
+
+const actionsRegistry = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	platformCeilings: { maxTimeoutSeconds: 600, maxMemoryMB: 2048 },
+	servers: [
+		{ name: 'invoice-service', approved: true },
+		{ name: 'courier-api', approved: false },
+	],
+	actions: [
+		{
+			id: 'fetch-invoice',
+			name: 'Fetch invoice',
+			description: 'Retrieve one invoice record from the registered invoice service',
+			type: 'ExternalServer',
+			parameters: [
+				{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+			],
+			outputs: { invoice: 'object' },
+			envelope: { timeoutSeconds: 120, maxMemoryMB: 512, useIsolation: false },
+			securityLevel: 'Low',
+			confirmation: 'auto-confirm',
+			effect: 'read',
+			server: { name: 'invoice-service', operation: 'getInvoice', mappings: { invoiceId: 'invoiceId' } },
+		},
+		{
+			id: 'summarize-invoice',
+			name: 'Summarize invoice',
+			description: 'Produce a plain-language summary of one invoice for the drafting agent',
+			type: 'AgenticPrompt',
+			parameters: [
+				{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+			],
+			outputs: { summary: 'string' },
+			envelope: { timeoutSeconds: 90, maxMemoryMB: 256, useIsolation: false },
+			securityLevel: 'Low',
+			confirmation: 'auto-confirm',
+			effect: 'read',
+		},
+		{
+			id: 'compile-quarterly-report',
+			name: 'Compile quarterly report',
+			description: 'Run the quarterly reporting script over the ledger in sidecar isolation',
+			type: 'PythonScript',
+			parameters: [
+				{ name: 'quarter', type: 'string', validation: { enumValues: ['Q1', 'Q2', 'Q3', 'Q4'] } },
+			],
+			outputs: { reportPath: 'string' },
+			envelope: { timeoutSeconds: 480, maxMemoryMB: 1024, useIsolation: true },
+			securityLevel: 'Standard',
+			confirmation: 'auto-confirm',
+			effect: 'read',
+		},
+		{
+			id: 'file-draft-chargeback',
+			name: 'File draft chargeback',
+			description: 'Draft a chargeback case for one disputed invoice and file it for review',
+			type: 'CSharpScript',
+			parameters: [
+				{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+				{ name: 'amount', type: 'number', validation: { minimum: 0 } },
+			],
+			outputs: { caseId: 'string' },
+			envelope: { timeoutSeconds: 300, maxMemoryMB: 1024, useIsolation: true },
+			securityLevel: 'High',
+			confirmation: 'confirm',
+			effect: 'write',
+		},
+		{
+			id: 'send-invoice-email',
+			name: 'Send invoice email',
+			description: 'Send one invoice to one recipient through the registered invoice service',
+			type: 'ExternalServer',
+			parameters: [
+				{ name: 'invoiceId', type: 'string', validation: { minLength: 1 } },
+				{ name: 'recipient', type: 'string', validation: { minLength: 1 } },
+			],
+			outputs: { messageId: 'string' },
+			envelope: { timeoutSeconds: 60, maxMemoryMB: 256, useIsolation: false },
+			securityLevel: 'Critical',
+			confirmation: 'confirm',
+			effect: 'write',
+			server: { name: 'invoice-service', operation: 'sendInvoiceEmail', mappings: { invoiceId: 'invoiceId', recipient: 'recipient' } },
+		},
+	],
+}
+
+const actionsManifest = {
+	owner: 'Billing team',
+	reviewedOn: '2026-10-15',
+	agents: [
+		{
+			agent: 'invoice-drafting-agent',
+			stage: 'autonomous',
+			grants: [
+				{ action: 'fetch-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] },
+				{ action: 'summarize-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] },
+			],
+		},
+		{
+			agent: 'chargeback-agent',
+			stage: 'propose-only',
+			grants: [
+				{
+					action: 'file-draft-chargeback',
+					argumentScopes: [
+						{ parameter: 'invoiceId', pattern: 'INV-*' },
+						{ parameter: 'amount', pattern: '*' },
+					],
+				},
+			],
+		},
+		{
+			agent: 'archive-reader',
+			stage: 'read-only',
+			grants: [
+				{ action: 'fetch-invoice', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-2026-*' }] },
+			],
+		},
+	],
+}
+
+const actionsAudit = (extra) => actionsPolicy.evaluate({
+	registry: actionsRegistry,
+	manifest: actionsManifest,
+	today,
+	...extra,
+})[0].result
+
+r = actionsAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.scoping.length === 3,
+	'valid registry and manifest pass the audit in wasm',
+)
+assert(
+	Object.keys(r).sort().join(',') === 'findings,scoping,valid',
+	'the audit answers in the stable wasm shape {valid, findings, scoping}',
+)
+const scoping = Object.fromEntries(r.scoping.map((s) => [s.agent, s]))
+assert(
+	scoping['invoice-drafting-agent'].stage === 'autonomous' &&
+		scoping['invoice-drafting-agent'].actions.join(',') === 'fetch-invoice,summarize-invoice' &&
+		scoping['chargeback-agent'].stage === 'propose-only' &&
+		scoping['archive-reader'].stage === 'read-only',
+	'the scoping reports each agent with its stage and granted actions in wasm',
+)
+
+r = actionsAudit({
+	registry: {
+		...actionsRegistry,
+		actions: actionsRegistry.actions.map((a) =>
+			a.id === 'fetch-invoice'
+				? { ...a, parameters: [{ name: 'invoiceId', type: '', validation: { minLength: 1 } }] }
+				: a,
+		),
+	},
+})
+assert(hasFinding(r, 'action/parameter-untyped') && r.valid === false, 'untyped parameter is caught in wasm')
+
+r = actionsAudit({
+	registry: {
+		...actionsRegistry,
+		actions: actionsRegistry.actions.map((a) =>
+			a.id === 'compile-quarterly-report'
+				? { ...a, envelope: { ...a.envelope, timeoutSeconds: 900 } }
+				: a,
+		),
+	},
+})
+assert(hasFinding(r, 'envelope/exceeds-ceiling') && r.valid === false, 'envelope over the platform ceiling is caught in wasm')
+
+r = actionsAudit({
+	registry: {
+		...actionsRegistry,
+		actions: actionsRegistry.actions.map((a) =>
+			a.id === 'send-invoice-email'
+				? { ...a, confirmation: 'auto-confirm' }
+				: a,
+		),
+	},
+})
+assert(hasFinding(r, 'action/confirm-required-at-level') && r.valid === false, 'auto-confirmed Critical action is caught in wasm')
+
+r = actionsAudit({
+	manifest: {
+		...actionsManifest,
+		agents: actionsManifest.agents.map((g) =>
+			g.agent === 'chargeback-agent'
+				? { ...g, grants: [{ action: 'purge-invoice-archive', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] }] }
+				: g,
+		),
+	},
+})
+assert(hasFinding(r, 'manifest/action-unknown') && r.valid === false, 'grant for an undeclared action is caught in wasm')
+
+r = actionsAudit({
+	manifest: {
+		...actionsManifest,
+		agents: actionsManifest.agents.map((g) =>
+			g.agent === 'archive-reader'
+				? { ...g, grants: [...g.grants, { action: 'file-draft-chargeback', argumentScopes: [{ parameter: 'invoiceId', pattern: 'INV-*' }] }] }
+				: g,
+		),
+	},
+})
+assert(hasFinding(r, 'manifest/stage-contradiction') && r.valid === false, 'read-only agent granted a write is caught in wasm')
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
