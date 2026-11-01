@@ -1,0 +1,35 @@
+# DEK registry — The Software Field Guide, issue #79.
+#
+# The per-tenant data-encryption-key registry: the strongest verified
+# deletion primitive the book has. Each row names a key, the tenant it
+# guards, and its state — and a destroyed key carries the day it died
+# and what destroyed it, because a destruction without its evidence
+# record is a deletion asserted, not evidenced. The erasure case gate
+# leans on this registry: a case can only claim a tenant forgotten
+# when the registry holds no live key for it. Example dates are
+# chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+
+keys:
+  # Offboarded: the acme tenancy was erased in October — key destroyed,
+  # evidence recorded.
+  - dek: tenant-acme-dek-004
+    tenant: tenant-acme
+    state: destroyed
+    destroyedAt: 2026-10-02
+    destroyedBy: KMS DestroyKey in change CHG-4471; key material unrecoverable, cf. runbook RB-014
+
+  # The globex erasure ran a few days later, same discipline.
+  - dek: tenant-globex-dek-002
+    tenant: tenant-globex
+    state: destroyed
+    destroyedAt: 2026-10-06
+    destroyedBy: KMS DestroyKey in change CHG-4488; key material unrecoverable, cf. runbook RB-014
+
+  # A live tenancy: the key works, the data is readable — the erasure
+  # gate will refuse to forget initech while this row says active.
+  - dek: tenant-initech-dek-001
+    tenant: tenant-initech
+    state: active

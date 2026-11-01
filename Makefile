@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the seven wasm bundles into build/wasm/
+#   make build         compile the eight wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -36,6 +36,12 @@
 #                      [ACTIONS_REGISTRY=... ACTIONS_MANIFEST=...] [TODAY=...]
 #   make actions-demo  the done-when proof: a phantom grant caught with the
 #                      manifest cited (runs the whole demo)
+#   make check-erasure validate the DEK registry (per-tenant keys, states,
+#                      destruction evidence) [ERASURE_KEYS=...] [TODAY=...]
+#   make erasure-gate  gate an erasure case against the DEK registry
+#                      [ERASURE_KEYS=... ERASURE_CASE=...] [TODAY=...]
+#   make erasure-demo  the done-when proof: a replica without its sweep
+#                      record caught citing the store (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -60,6 +66,8 @@ ALERTING ?= examples/alerting/alerting.yaml
 REGISTER ?= examples/alerting/register.yaml
 ACTIONS_REGISTRY ?= examples/actions/registry.yaml
 ACTIONS_MANIFEST ?= examples/actions/manifest.yaml
+ERASURE_KEYS ?= examples/erasure/keys.yaml
+ERASURE_CASE ?= examples/erasure/case-forgotten.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -67,6 +75,7 @@ ACTIONS_MANIFEST ?= examples/actions/manifest.yaml
 	check-obs obs-lint obs-gate obs-demo \
 	check-alerts alerts-gate alerts-demo \
 	check-actions actions-gate actions-demo \
+	check-erasure erasure-gate erasure-demo \
 	examples ci
 
 fmt:
@@ -102,6 +111,9 @@ build:
 	$(OPA) build -t wasm -e actions/audit -o build/actions.tar.gz policies
 	tar -xzf build/actions.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/actions.wasm
+	$(OPA) build -t wasm -e erasure/audit -o build/erasure.tar.gz policies
+	tar -xzf build/erasure.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/erasure.wasm
 
 site: build
 	rm -rf site-build
@@ -387,6 +399,115 @@ actions-demo:
 	@echo "caught as expected: manifest/stage-contradiction naming archive-reader"
 	@echo "--- actions demo: all done-when proofs passed ---"
 
+# Erasure: validate the DEK registry (named keys, states, and
+# destruction evidence) alone.
+check-erasure:
+	@test -f "$(ERASURE_KEYS)" || { echo "usage: make check-erasure [ERASURE_KEYS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ERASURE_KEYS)' \
+		| jq -cs --arg today "$(TODAY)" '{keys: .[0], today: $$today}' \
+		| $(OPA) eval -d policies -I 'data.erasure.validate' --format=pretty | tee build/check-erasure.json
+	@jq -e '.valid == true' build/check-erasure.json > /dev/null \
+		|| { echo "check-erasure: the DEK registry is invalid — findings above"; exit 1; }
+
+# Gate the erasure case against the DEK registry: every store in the
+# inventory swept or honestly pending, the backup windows declared,
+# and the tenant's keys destroyed — nothing is forgotten without a
+# record. Fails (exit 1) when the gate finds errors.
+erasure-gate:
+	@test -f "$(ERASURE_KEYS)" || { echo "usage: make erasure-gate [ERASURE_KEYS=... ERASURE_CASE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(ERASURE_KEYS)' '$(ERASURE_CASE)' \
+		| jq -cs --arg today "$(TODAY)" '{keys: .[0], case: .[1], today: $$today}' \
+		| $(OPA) eval -d policies -I 'data.erasure.gate' --format=pretty | tee build/erasure-gate.json
+	@jq -e '.valid == true' build/erasure-gate.json > /dev/null \
+		|| { echo "erasure-gate: the deletion evidence gate found errors above"; exit 1; }
+
+# The done-when proof for book issue #79: a replica without its sweep
+# record is caught citing the store. Runs the control and the pending
+# case end to end, then proves all the broken variants fail loudly.
+erasure-demo:
+	@echo "--- 1. the DEK registry validates ---"
+	@$(MAKE) check-erasure TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the destroyed-DEK control passes and renders forgotten ---"
+	@$(MAKE) erasure-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "forgotten"' build/erasure-gate.json \
+		|| { echo "FAIL: the control case did not render the forgotten verdict"; cat build/erasure-gate.json; exit 1; }
+	@echo "control verdict: forgotten"
+	@echo "--- 3. the unexpired-backup case renders pending, honest and stays open ---"
+	@$(MAKE) erasure-gate ERASURE_CASE=examples/erasure/case-pending.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "pending, honest"' build/erasure-gate.json \
+		|| { echo "FAIL: the pending case did not render the pending, honest verdict"; cat build/erasure-gate.json; exit 1; }
+	@jq -e '.stores[] | select(.store == "nightly-backups" and .verdict == "pending")' build/erasure-gate.json > /dev/null \
+		|| { echo "FAIL: the pending backup did not render as pending"; cat build/erasure-gate.json; exit 1; }
+	@echo "pending case verdict: pending, honest — the case stays open until the window closes"
+	@echo "--- 4. a replica without its sweep record is caught citing the store ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.replica-unswept.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-replica.txt 2>&1; \
+		then echo "FAIL: the unswept replica was not caught"; cat build/erasure-replica.txt; exit 1; \
+		else grep -q 'sweep/store-unswept' build/erasure-replica.txt \
+			|| { echo "FAIL: the gate failed without the unswept-store rule"; cat build/erasure-replica.txt; exit 1; }; \
+		fi
+	@grep -q 'postgres-replica-eu' build/erasure-replica.txt \
+		|| { echo "FAIL: the finding does not cite the store"; cat build/erasure-replica.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-replica.txt; exit 1; }
+	@echo "caught as expected: sweep/store-unswept naming postgres-replica-eu"
+	@echo "--- 5. a case closed while a backup window is still open is caught ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.closed-early.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-closed-early.txt 2>&1; \
+		then echo "FAIL: the closed-early case was not caught"; cat build/erasure-closed-early.txt; exit 1; \
+		else grep -q 'case/closed-early' build/erasure-closed-early.txt \
+			|| { echo "FAIL: the gate failed without the closed-early rule"; cat build/erasure-closed-early.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-closed-early.txt; exit 1; }
+	@echo "caught as expected: case/closed-early"
+	@echo "--- 6. a tenant whose key the registry still holds live is caught ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.dek-active.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-dek-active.txt 2>&1; \
+		then echo "FAIL: the live key was not caught"; cat build/erasure-dek-active.txt; exit 1; \
+		else grep -q 'keys/dek-not-destroyed' build/erasure-dek-active.txt \
+			|| { echo "FAIL: the gate failed without the live-key rule"; cat build/erasure-dek-active.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-dek-active.txt; exit 1; }
+	@echo "caught as expected: keys/dek-not-destroyed"
+	@echo "--- 7. a sweep dated before the erasure request is caught ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.sweep-before-request.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-before-request.txt 2>&1; \
+		then echo "FAIL: the backdated sweep was not caught"; cat build/erasure-before-request.txt; exit 1; \
+		else grep -q 'sweep/before-request' build/erasure-before-request.txt \
+			|| { echo "FAIL: the gate failed without the before-request rule"; cat build/erasure-before-request.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-before-request.txt; exit 1; }
+	@echo "caught as expected: sweep/before-request"
+	@echo "--- 8. a case for a tenant the registry never listed is caught ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.tenant-unregistered.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-unregistered.txt 2>&1; \
+		then echo "FAIL: the unregistered tenant was not caught"; cat build/erasure-unregistered.txt; exit 1; \
+		else grep -q 'keys/tenant-unregistered' build/erasure-unregistered.txt \
+			|| { echo "FAIL: the gate failed without the tenant-registry rule"; cat build/erasure-unregistered.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-unregistered.txt; exit 1; }
+	@echo "caught as expected: keys/tenant-unregistered"
+	@echo "--- 9. a backup without its expiry window is caught ---"
+	@if $(MAKE) erasure-gate ERASURE_CASE=examples/erasure/broken/case.backup-no-expiry.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-no-expiry.txt 2>&1; \
+		then echo "FAIL: the backup without its window was not caught"; cat build/erasure-no-expiry.txt; exit 1; \
+		else grep -q 'store/backup-expiry-required' build/erasure-no-expiry.txt \
+			|| { echo "FAIL: the gate failed without the backup-window rule"; cat build/erasure-no-expiry.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/erasure-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-no-expiry.txt; exit 1; }
+	@echo "caught as expected: store/backup-expiry-required"
+	@echo "--- 10. a destroyed key without its evidence record is caught at registry time ---"
+	@if $(MAKE) check-erasure ERASURE_KEYS=examples/erasure/broken/keys.no-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/erasure-no-evidence.txt 2>&1; \
+		then echo "FAIL: the destruction without evidence was not caught"; cat build/erasure-no-evidence.txt; exit 1; \
+		else grep -q 'key/destroyed-by-required' build/erasure-no-evidence.txt \
+			|| { echo "FAIL: the registry failed without the evidence rule"; cat build/erasure-no-evidence.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-erasure.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/erasure-no-evidence.txt; exit 1; }
+	@echo "caught as expected: key/destroyed-by-required"
+	@echo "--- erasure demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -400,7 +521,10 @@ examples:
 	$(MAKE) alerts-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-actions TODAY=$(ANCHOR_TODAY)
 	$(MAKE) actions-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-erasure TODAY=$(ANCHOR_TODAY)
+	$(MAKE) erasure-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) erasure-gate ERASURE_CASE=examples/erasure/case-pending.yaml TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo
 	$(OPA) fmt --fail -l policies

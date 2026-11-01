@@ -1,0 +1,26 @@
+# The closed-early case: the globex erasure with the status flipped
+# to closed while the backup window is still open until 2027-01-15.
+# Every sweep that exists is sound and the DEK is destroyed — but the
+# nightly backups can still restore the tenant, and a case that says
+# forgotten while a store can still produce the data is a claim the
+# evidence does not support. (The pending case with status: closed.)
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-globex
+requestedOn: 2026-10-05
+requestedBy: DSR-2026-052 (tenant offboarding erasure request)
+status: closed
+
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2027-01-15}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-06
+    sweptBy: DELETE cascade from the tenant row; 208 rows removed, count verified by the tenant-id scan
+  - store: corpus-vector-index
+    sweptOn: 2026-10-06
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified

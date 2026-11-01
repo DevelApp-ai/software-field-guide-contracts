@@ -1,0 +1,44 @@
+# Erasure case — the destroyed-DEK control — The Software Field Guide, issue #79.
+#
+# The per-tenant right-to-be-forgotten evidence for tenant-acme: the
+# request that opened the case, the storage inventory, and a sweep
+# record for every sweepable store. The nightly backups age out by
+# their declared expiry window — when the window has passed, the
+# expiry date is itself the record (an unexpired window would be an
+# honest pending state instead, and the case would stay open; see
+# case-pending.yaml). The DEK registry shows the tenant's key
+# destroyed with its evidence. Every store is swept or aged out, so
+# the case closes — and the gate renders the verdict: forgotten.
+#
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-acme
+requestedOn: 2026-10-01
+requestedBy: DSR-2026-041 (tenant offboarding erasure request)
+status: closed
+
+# The storage inventory: every store where the tenant's data lives —
+# primaries, replicas, derived indexes, backups. The gate can only
+# judge the stores the case declares; the inventory is where honesty
+# starts.
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: postgres-replica-eu, kind: replica}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2026-10-15}
+
+# The sweep records: what was actually deleted, on which day, by
+# whose hand. Nothing is forgotten without a record.
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-02
+    sweptBy: DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan
+  - store: postgres-replica-eu
+    sweptOn: 2026-10-03
+    sweptBy: replica catch-up confirmed; the tenant-id scan returns zero rows on the replica
+  - store: corpus-vector-index
+    sweptOn: 2026-10-04
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified

@@ -1,0 +1,20 @@
+# The live-key case: every store in initech's inventory is swept and
+# the case is in perfect order — except the DEK registry still holds
+# tenant-initech-dek-001 marked active. With the key alive the
+# ciphertext is readable and the erasure is a promise: the case
+# cannot claim forgotten while the registry disagrees.
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-initech
+requestedOn: 2026-10-08
+requestedBy: DSR-2026-058 (tenant offboarding erasure request)
+status: open
+
+stores:
+  - {name: postgres-primary, kind: primary}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-09
+    sweptBy: DELETE cascade from the tenant row; 97 rows removed, count verified by the tenant-id scan

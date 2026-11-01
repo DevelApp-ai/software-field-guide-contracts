@@ -1,0 +1,20 @@
+# The unregistered tenant: the case is tidy, every store swept, but
+# the DEK registry has no row for tenant-hooli at all. A case without
+# its registry row is a deletion claim with no primitive to stand on
+# — the registry is where the crypto-erasure is proven, and hooli
+# never made it in.
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-hooli
+requestedOn: 2026-10-10
+requestedBy: DSR-2026-061 (tenant offboarding erasure request)
+status: open
+
+stores:
+  - {name: postgres-primary, kind: primary}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-11
+    sweptBy: DELETE cascade from the tenant row; 33 rows removed, count verified by the tenant-id scan

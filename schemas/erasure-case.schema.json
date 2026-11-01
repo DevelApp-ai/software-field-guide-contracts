@@ -1,0 +1,99 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/erasure-case.schema.json",
+	"title": "Erasure case",
+	"description": "The per-tenant right-to-be-forgotten evidence, as defined in The Software Field Guide, issue #79: the request that opened the case, the storage inventory, the sweep records, and the backup expiry windows still open. The #69 rule, moved from alerting to erasure: nothing is forgotten without a record. The Rego gate (policies/erasure) judges this case against the DEK registry: every store in the inventory needs a sweep record, an aged-out expiry window, or an explicit pending reason; backups must declare their expiry windows; sweeps must postdate the request and predate the clock; and the tenant's keys must be destroyed in the registry before the case may close. This schema mirrors the shape rules; the gate additionally enforces the cross-document rules a JSON schema cannot — the tenant must be registered with all keys destroyed, the sweep stores must be declared in the inventory, and a closed case may not still hold a pending store.",
+	"type": "object",
+	"required": ["owner", "reviewedOn", "tenant", "requestedOn", "requestedBy", "status", "stores", "sweeps"],
+	"additionalProperties": true,
+	"properties": {
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Who owns the case and answers for its honesty. A deletion case with an owner and a review cadence is the discipline."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the case was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future — a year-old sweep record says nothing about the copies made since."
+		},
+		"tenant": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The tenant (or subject) this case erases. Must be a tenant the DEK registry lists, with every key destroyed."
+		},
+		"requestedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "The day the erasure request arrived, YYYY-MM-DD — the day the clock started. Sweep records that predate it do not count."
+		},
+		"requestedBy": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The named request — a DSR id, an offboarding ticket. An erasure without a named request is deletion without cause."
+		},
+		"status": {
+			"type": "string",
+			"enum": ["open", "closed"],
+			"description": "The case's state. The gate fails a closed case that still holds a pending store: nothing is forgotten while a store can still produce the data."
+		},
+		"stores": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The storage inventory: every store where the tenant's data lives. The gate can only judge the stores the case declares — an empty inventory claims the data is nowhere, and that claim is the least believable one in the whole document.",
+			"items": {
+				"type": "object",
+				"required": ["name", "kind"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Store name, e.g. postgres-replica-eu. Unique across the inventory; sweep records and findings cite it verbatim."
+					},
+					"kind": {
+						"type": "string",
+						"minLength": 1,
+						"description": "What kind of store this is — primary, replica, vector-store, backup. The kind is what tells a sweepable store from a window-bound backup."
+					},
+					"expiresOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "Required for backup stores: the day the last backup that can restore the tenant ages out, YYYY-MM-DD. A backup without its expiry window never becomes provably gone. Once passed, the expiry date is itself the record."
+					},
+					"pendingReason": {
+						"type": "string",
+						"minLength": 1,
+						"description": "An explicit reason a store is not yet swept — a reindex cycle, a provider queue. A reason is a promise with words in it: it keeps the case honest and open, never closed."
+					}
+				}
+			}
+		},
+		"sweeps": {
+			"type": "array",
+			"description": "The sweep records: what was actually deleted, on which day, by whose hand. Nothing is forgotten without a record.",
+			"items": {
+				"type": "object",
+				"required": ["store", "sweptOn", "sweptBy"],
+				"additionalProperties": true,
+				"properties": {
+					"store": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The store this sweep record covers. Must be declared in the inventory — a sweep for an undeclared store means the two documents disagree."
+					},
+					"sweptOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the sweep ran, YYYY-MM-DD. Must postdate the request and predate the injected clock — evidence cannot arrive before the work it evidences."
+					},
+					"sweptBy": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Who or what swept it — the job, the change, the hand. A record names its actor."
+					}
+				}
+			}
+		}
+	}
+}

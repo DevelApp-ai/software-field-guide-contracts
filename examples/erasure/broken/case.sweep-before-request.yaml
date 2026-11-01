@@ -1,0 +1,29 @@
+# The backdated sweep: postgres-primary carries a sweep record dated
+# 2026-09-28 — three days before the erasure request arrived on
+# 2026-10-01. A sweep that predates the request it claims to serve is
+# a record that cannot close this case: something was deleted, but it
+# was not this request.
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-acme
+requestedOn: 2026-10-01
+requestedBy: DSR-2026-041 (tenant offboarding erasure request)
+status: closed
+
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: postgres-replica-eu, kind: replica}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2026-10-15}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-09-28
+    sweptBy: DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan
+  - store: postgres-replica-eu
+    sweptOn: 2026-10-03
+    sweptBy: replica catch-up confirmed; the tenant-id scan returns zero rows on the replica
+  - store: corpus-vector-index
+    sweptOn: 2026-10-04
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified

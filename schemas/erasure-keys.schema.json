@@ -1,0 +1,58 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/erasure-keys.schema.json",
+	"title": "DEK registry",
+	"description": "The per-tenant data-encryption-key registry, as defined in The Software Field Guide, issue #79: the strongest verified deletion primitive the book has. Each row names a key, the tenant it guards, and its state — and a destroyed key carries the day it died and what destroyed it, because a destruction without its evidence record is a deletion asserted, not evidenced. This schema mirrors the shape rules of the Rego validator (policies/erasure); the validator additionally enforces the semantic rules a JSON schema cannot — states limited to active or destroyed, destruction dates real and not in the future, destroyed keys carrying their evidence record, active keys carrying none, and dek names unique across the registry.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "keys"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the registry. The key table is versioned like code — a key table nobody re-reads is a key table nobody still believes."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the registry was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"keys": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The per-tenant key rows. An empty registry erases nobody — at least one row is required.",
+			"items": {
+				"type": "object",
+				"required": ["dek", "tenant", "state"],
+				"additionalProperties": true,
+				"properties": {
+					"dek": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Key name, e.g. tenant-acme-dek-004. Unique across the registry; findings cite it verbatim."
+					},
+					"tenant": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The tenant this key guards. The erasure case gate joins on this name."
+					},
+					"state": {
+						"type": "string",
+						"enum": ["active", "destroyed"],
+						"description": "What the key is. The registry must say, not shrug — a state that is neither active nor destroyed is a finding."
+					},
+					"destroyedAt": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the key died, YYYY-MM-DD. Required when state is destroyed — a destruction without its day is a rumor. Must not be in the future."
+					},
+					"destroyedBy": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The evidence record of the destruction — the change, the runbook, the hand that did it. Required when state is destroyed; contradictory on an active key."
+					}
+				}
+			}
+		}
+	}
+}
