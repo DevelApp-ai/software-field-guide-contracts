@@ -14,6 +14,8 @@ And it implements the **deletion evidence validator** from [book issue #79](http
 
 And it implements the **segment render-consistency and flow-evidence gate** from [book issue #80](https://github.com/DevelApp-ai/software-field-guide/issues/80): one segment contract, rendered to N fabrics — and a gate that proves every fabric rendered every rule, no fabric rendered a rule the contract never had, and no audit rule was promoted to enforce without the flow evidence its PR cites. A rule is not enforced until every fabric says so; promotion is evidence, not assertion.
 
+And it implements the **ingress hardening conformance validator** from [book issue #82](https://github.com/DevelApp-ai/software-field-guide/issues/82): the edge's posture as data — the DNS containment boundary, default-deny, the allowed domain patterns held inside the zone, certificate rotation clocks, SLOs with pagers behind them, audited route classes, and the kill path the platform swears it can pull — judged against a drill record. A wildcard is contained or it is too broad; an expired certificate is exposed; a kill path declared but never rehearsed fails the gate.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -41,10 +43,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `segment/validate` | one segment contract alone | `{"contract": {...}, "today": "YYYY-MM-DD"}` |
 | `segment/gate` | fabric renders, flow evidence, and a promotion PR against the contract | `{"contract": {...}, "renders": {...}, "flows": {...}, "promotion": {...}, "today": "YYYY-MM-DD"}` |
 | `segment/audit` | all of it at once — one verdict, the per-rule cards | the superset of the above |
+| `ingress/validate` | one ingress posture case alone | `{"case": {...}, "today": "YYYY-MM-DD"}` |
+| `ingress/gate` | a drill record against the posture case | `{"case": {...}, "drill": {...}, "today": "YYYY-MM-DD"}` |
+| `ingress/audit` | both at once — one verdict, the posture cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.7** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, and the segment render-consistency gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.8** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, and the ingress hardening conformance validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -508,6 +513,90 @@ make segment-demo
 #      exception/ttl-expired
 ```
 
+## The ingress hardening conformance validator
+
+The edge's posture, as data. The secure-developer-ingress chapter's YAML becomes an **ingress posture case** — the DNS containment boundary (`zone`), the request policy (default-deny and the decision that backs it), the allowed domain patterns (concrete hosts and wildcards the zone can contain), the TLS certificates with their rotation clocks, the service level objectives with the pagers behind them, the route classes the edge carries and the ones the audit logs, and the kill path the platform swears it can pull. A **drill record** holds the rehearsal evidence, and the gate joins the two — a kill path declared but never rehearsed is a kill path that has drifted. The validator is honest about what it models: pattern breadth, certificate windows, pager wiring, audit coverage, and rehearsal staleness — not pretending to full managed-gateway semantics.
+
+```yaml
+# case.yaml — the edge's posture as data
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+zone: dev.internal          # the DNS containment boundary
+
+requestPolicy:
+  defaultDeny: true         # an allow list stays an allow list
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  - pattern: "*.dev.internal"     # a wildcard, contained
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  - serves: edge.dev.internal     # well outside its rotation window
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call       # an SLO nobody pages is a promise nobody keeps
+
+routes: [developer-app, partner-api, health-check]
+loggedRouteClasses: [developer-app, partner-api, health-check]
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone
+```
+
+```yaml
+# drill.yaml — the rehearsal evidence, joined against the case
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+maxStalenessDays: 180    # the staleness clock, declared next to the evidence
+
+drills:
+  - killPath: seal-edge
+    drilledOn: 2026-10-10
+    evidence: "drill log 2026-10-10: seal-edge pulled, all ingress denied for 90 seconds, recovery clean"
+```
+
+### What the validator enforces and proofs
+
+- **Loud validation of the case** (`ingress/validate`): missing fields, unversioned documents, stale review stamps, a zone without its owner, and the domain patterns — a wildcard must be concrete or a `*.`-prefixed suffix of at least two labels *inside the declared zone* (`domain/too-broad`), and every pattern carries its intent.
+- **The posture rules**: an allow list without default-deny is not an allow list (`requestpolicy/default-deny-required`), an expired certificate is an exposure (`cert/expired`, ERROR — the verdict is `exposed`), a certificate inside its rotation window flags honestly, not fatally (`cert/near-expiry`, WARNING — the verdict is `review`), an SLO without its pager is a promise nobody keeps (`slo/pager-required`), and every route class the case declares must be logged (`audit/class-unlogged`).
+- **The kill-path gate** (`ingress/gate`): the drill record is validated on its own clock (`maxStalenessDays`, 180 by default), and every kill path the case declares must be rehearsed — a declared kill path with no rehearsal on the record fails (`killpath/never-rehearsed`, citing the drill file), a rehearsal grown stale flags for review (`killpath/stale-rehearsal`), a future-dated drill never counts (`drill/future-dated`), and a drill row for a kill path the case never declared is caught citing both files (`drill/killpath-unknown`).
+- **One audit** (`ingress/audit`): the composed entrypoint for CI and the playground — case validated, drill gated, one verdict (`hardened`, `review`, or `exposed`), and the posture cards alongside: one card per judged item across the six areas (request policy, allowed domains, tls certificates, service level objectives, audit coverage, kill path), each hardened, review, or exposed, with the record that resolved it.
+
+The done-when proof from book issue #82 runs as a single target:
+
+```sh
+make ingress-demo
+# → 1. the posture case validates
+#   2. the control passes the gate and renders hardened
+#   3. a wildcard the zone cannot hold is caught:
+#      domain/too-broad — the wildcard escaped dev.internal
+#   4. a missing default-deny is caught:
+#      requestpolicy/default-deny-required — an allow list without the default is not an allow list
+#   5. an expired certificate is caught naming the host:
+#      cert/expired naming edge.dev.internal
+#   6. a certificate inside its rotation window flags honestly, not fatally:
+#      cert/near-expiry — the case stays valid, the rotation is late
+#   7. an SLO without its pager is caught:
+#      slo/pager-required — an SLO nobody pages is a promise nobody keeps
+#   8. an unlogged route class is caught naming the class:
+#      audit/class-unlogged naming partner-api
+#   9. a kill path never rehearsed is caught citing the drill record:
+#      killpath/never-rehearsed citing drill.never-rehearsed.yaml
+#  10. a rehearsal grown stale flags for review, not failure:
+#      killpath/stale-rehearsal — the verdict is review, the gate stays green
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -528,6 +617,8 @@ make check-erasure TODAY=2026-10-20         # the DEK registry alone
 make erasure-gate  TODAY=2026-10-20         # the demo erasure case against the registry
 make check-segment TODAY=2026-10-20         # the segment contract alone
 make segment-gate  TODAY=2026-10-20         # renders + flows + promotion against the contract
+make check-ingress TODAY=2026-10-20         # the ingress posture case alone
+make ingress-gate  TODAY=2026-10-20         # the drill record against the posture case
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -538,7 +629,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -555,18 +646,20 @@ policies/alerts/    lib, model, policy, gate, audit
 policies/actions/   lib, model, policy, gate, audit
 policies/erasure/   lib, model, policy, gate, audit
 policies/segment/   lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment)
+policies/ingress/   lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
                     instrumented sources), the alerting demo (contract + incident
                     register), the erasure demo (DEK registry + cases), and the segment
-                    demo (contract + renders + flows + promotion, plus broken variants)
+                    demo (contract + renders + flows + promotion, plus broken variants),
+                    and the ingress demo (posture case + drill record, plus broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -576,12 +669,13 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the nine `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the ten `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
 - **Nothing is forgotten without a record.** The #69 rule, moved from alerting to erasure: a store in the inventory needs a sweep record, an aged-out backup window, or an explicit pending reason — and an unexpired backup is an honest pending state, not a failure. The case stays open until the window closes; the registry's destroyed keys carry their evidence records, because a destruction asserted is not a destruction evidenced.
 - **A rule is not enforced until every fabric says so.** The segment gate verifies every join both ways — a rule missing from one render drifts silently, and a render carrying a rule the contract never had drifts just as silently — and cites both files when it bites, because a mismatch without its documents is a mystery, not a finding. Promotion is evidence, not assertion: an audit rule moves to enforce only by a PR citing flow evidence the gate holds, with matched flows inside a window the evidence actually covered. The gate models a stated subset — direction, type, port, mode — and says so, rather than pretending to full eBPF or CIL semantics. And a rule nothing exercised is flagged for review, not failed: a dead rule is a question, not an incident.
+- **Posture is data, and a kill path is rehearsed or it is a hope.** The ingress case records the edge's posture as checkable facts — the zone that contains every wildcard, the default-deny that keeps the allow list an allow list, the rotation clocks on the certificates, the pagers behind the SLOs, the audit coverage of the route classes — and the gate joins the drill record to it, because a kill path declared but never rehearsed is a lever nobody has proven they can pull. Rehearsal staleness is a warning, not an error: a kill path rehearsed once and never again is a question, not an incident. The composed audit dedupes the shared conditions, so the same broken case reports once, whichever lens caught it.
 
 ## License
 

@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the nine policy.wasm builds and evaluates
+// End-to-end smoke test: loads the ten policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -220,6 +220,7 @@ const obsPolicy = await load('obs')
 const actionsPolicy = await load('actions')
 const erasurePolicy = await load('erasure')
 const segmentPolicy = await load('segment')
+const ingressPolicy = await load('ingress')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -946,6 +947,164 @@ r = segmentAudit({
 assert(
 	hasFinding(r, 'exception/ttl-expired') && r.valid === false && r.verdict === 'inconsistent',
 	'a TTL-expired exception makes the composed verdict inconsistent in wasm',
+)
+
+// ---- ingress --------------------------------------------------------------
+//
+// The #82 worked example in wasm: one posture case and its drill record,
+// judged by the composed ingress/audit entrypoint — the control renders
+// hardened with one card per judged item, and every seeded variant bites
+// exactly the way the native demo proves it does.
+
+const ingressCase = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Platform team',
+	zone: 'dev.internal',
+	requestPolicy: {
+		defaultDeny: true,
+		decision: 'deny every request the allowed domains do not admit',
+	},
+	domains: [
+		{ pattern: '*.dev.internal', intent: 'every developer app tenant, inside the platform zone' },
+		{ pattern: 'partner.example.com', intent: 'the one external partner host the storefront fronts' },
+	],
+	certs: [
+		{ serves: 'edge.dev.internal', notBefore: '2026-08-01', notAfter: '2027-01-15', rotateByDays: 30 },
+		{ serves: 'partner.example.com', notBefore: '2026-07-01', notAfter: '2026-12-15', rotateByDays: 21 },
+	],
+	slos: [{ name: 'edge availability', target: '99.9% of requests served inside 200ms', pager: 'platform on-call' }],
+	routes: [{ class: 'developer-app' }, { class: 'partner-api' }, { class: 'health-check' }],
+	loggedRouteClasses: ['developer-app', 'partner-api', 'health-check'],
+	killPath: {
+		name: 'seal-edge',
+		effect: 'the edge denies all ingress and the platform seals inside its zone',
+	},
+}
+
+const ingressDrill = {
+	version: 1,
+	reviewedOn: '2026-10-15',
+	owner: 'Platform team',
+	maxStalenessDays: 180,
+	drills: [
+		{
+			killPath: 'seal-edge',
+			drilledOn: '2026-10-10',
+			evidence: 'drill log 2026-10-10: seal-edge pulled, all ingress denied for 90 seconds, recovery clean',
+		},
+	],
+}
+
+const ingressAudit = (extra) => ingressPolicy.evaluate({
+	case: ingressCase,
+	drill: ingressDrill,
+	today,
+	caseFile: 'ingress-case.yaml',
+	drillFile: 'drill.yaml',
+	...extra,
+})[0].result
+
+r = ingressAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'hardened' && r.cards.length === 10,
+	'the ingress control passes the audit in wasm and renders hardened',
+)
+
+r = ingressAudit({
+	case: { ...ingressCase, domains: [{ pattern: '*.example.com', intent: 'a wildcard the zone cannot hold' }] },
+})
+assert(
+	hasFinding(r, 'domain/too-broad') && r.valid === false && r.verdict === 'exposed',
+	'a wildcard beyond the declared zone is caught in wasm',
+)
+
+r = ingressAudit({
+	case: { ...ingressCase, requestPolicy: { ...ingressCase.requestPolicy, defaultDeny: false } },
+})
+assert(
+	hasFinding(r, 'requestpolicy/default-deny-required') && r.valid === false,
+	'an allow list without default-deny is not an allow list in wasm',
+)
+
+r = ingressAudit({
+	case: {
+		...ingressCase,
+		certs: ingressCase.certs.map((c) => c.serves === 'edge.dev.internal' ? { ...c, notAfter: '2026-09-30' } : c),
+	},
+})
+assert(
+	r.findings.some((f) => f.rule === 'cert/expired' && /edge\.dev\.internal/.test(f.message)) && r.verdict === 'exposed',
+	'an expired certificate is an exposure in wasm, naming the host it served',
+)
+
+r = ingressAudit({
+	case: {
+		...ingressCase,
+		certs: ingressCase.certs.map((c) => c.serves === 'edge.dev.internal' ? { ...c, notAfter: '2026-11-10' } : c),
+	},
+})
+assert(
+	hasFinding(r, 'cert/near-expiry') && r.valid === true && r.verdict === 'review',
+	'a certificate inside its rotation window flags for review in wasm, not failure',
+)
+
+r = ingressAudit({
+	case: { ...ingressCase, slos: [{ name: 'edge availability', target: '99.9% of requests served inside 200ms' }] },
+})
+assert(
+	hasFinding(r, 'slo/pager-required') && r.valid === false,
+	'an SLO without its pager is a promise nobody keeps in wasm',
+)
+
+r = ingressAudit({
+	case: { ...ingressCase, loggedRouteClasses: ['developer-app', 'health-check'] },
+})
+assert(
+	r.findings.some((f) => f.rule === 'audit/class-unlogged' && /partner-api/.test(f.message)) && r.valid === false,
+	'a declared route class the audit never logs is caught in wasm, naming the class',
+)
+
+r = ingressAudit({ drill: { ...ingressDrill, drills: [] } })
+assert(
+	hasFinding(r, 'killpath/never-rehearsed') && r.valid === false && r.verdict === 'exposed',
+	'a kill path declared but never rehearsed fails the gate in wasm',
+)
+
+r = ingressAudit({
+	drill: {
+		...ingressDrill,
+		drills: [{ killPath: 'seal-edge', drilledOn: '2026-02-10', evidence: 'drill log 2026-02-10' }],
+	},
+})
+assert(
+	hasFinding(r, 'killpath/stale-rehearsal') && r.valid === true && r.verdict === 'review',
+	'a rehearsal grown stale flags for review in wasm, not failure',
+)
+
+r = ingressAudit({
+	drill: {
+		...ingressDrill,
+		drills: [{ killPath: 'seal-edge', drilledOn: '2026-12-01', evidence: 'drill log 2026-12-01' }],
+	},
+})
+assert(
+	hasFinding(r, 'drill/future-dated') && hasFinding(r, 'killpath/never-rehearsed'),
+	'a future-dated drill never counts as the rehearsal the kill path needs in wasm',
+)
+
+r = ingressAudit({
+	drill: {
+		...ingressDrill,
+		drills: [
+			...ingressDrill.drills,
+			{ killPath: 'seal-the-vault', drilledOn: '2026-10-12', evidence: 'drill log 2026-10-12' },
+		],
+	},
+})
+assert(
+	r.findings.some((f) => f.rule === 'drill/killpath-unknown' && /ingress-case\.yaml/.test(f.message) && /drill\.yaml/.test(f.message)),
+	'a rehearsal for a kill path the case never declared is caught in wasm, citing both files',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

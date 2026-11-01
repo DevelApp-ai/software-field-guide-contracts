@@ -1,0 +1,52 @@
+# BROKEN VARIANT — the SLO without its pager — The Software Field
+# Guide, issue #82.
+#
+# The control case with its availability SLO's pager removed: the
+# target still stands, but nobody swore to answer for it. An SLO
+# nobody pages is a promise nobody keeps, and the validator must
+# flag it exactly once at case time.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+zone: dev.internal
+
+requestPolicy:
+  defaultDeny: true
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  - pattern: "*.dev.internal"
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  # The target without the pager: a promise nobody answers for.
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+loggedRouteClasses:
+  - developer-app
+  - partner-api
+  - health-check
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone

@@ -49,6 +49,13 @@
 #                      FLOWS=... PROMOTION=...] [TODAY=...]
 #   make segment-demo  the done-when proof: a render missing one fabric
 #                      caught citing both files (runs the whole demo)
+#   make check-ingress validate the ingress posture case (the zone and its
+#                      wildcards, the default-deny, the certificate clocks,
+#                      the SLOs, the audit coverage) [INGRESS_CASE=...]
+#   make ingress-gate gate the kill path against the drill record
+#                      [INGRESS_CASE=... INGRESS_DRILL=...] [TODAY=...]
+#   make ingress-demo the done-when proof: a kill path never rehearsed
+#                      caught citing the drill record (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -79,6 +86,8 @@ CONTRACT ?= examples/segment/contract.yaml
 RENDERS ?= examples/segment/renders.yaml
 FLOWS ?= examples/segment/flows.yaml
 PROMOTION ?= examples/segment/promotion.yaml
+INGRESS_CASE ?= examples/ingress/case.yaml
+INGRESS_DRILL ?= examples/ingress/drill.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -88,6 +97,7 @@ PROMOTION ?= examples/segment/promotion.yaml
 	check-actions actions-gate actions-demo \
 	check-erasure erasure-gate erasure-demo \
 	check-segment segment-gate segment-demo \
+	check-ingress ingress-gate ingress-demo \
 	examples ci
 
 fmt:
@@ -129,6 +139,9 @@ build:
 	$(OPA) build -t wasm -e segment/audit -o build/segment.tar.gz policies
 	tar -xzf build/segment.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/segment.wasm
+	$(OPA) build -t wasm -e ingress/audit -o build/ingress.tar.gz policies
+	tar -xzf build/ingress.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/ingress.wasm
 
 site: build
 	rm -rf site-build
@@ -644,6 +657,131 @@ segment-demo:
 	@echo "caught as expected: exception/ttl-expired"
 	@echo "--- segment demo: all done-when proofs passed ---"
 
+# Ingress: validate the posture case (the zone and the wildcards it
+# must contain, the default-deny, the certificate rotation clocks,
+# the SLOs with their pagers, the audit coverage) alone.
+check-ingress:
+	@test -f "$(INGRESS_CASE)" || { echo "usage: make check-ingress [INGRESS_CASE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(INGRESS_CASE)' \
+		| jq -cs --arg today "$(TODAY)" --arg caseFile "$(INGRESS_CASE)" '{case: .[0], today: $$today, caseFile: $$caseFile}' \
+		| $(OPA) eval -d policies -I 'data.ingress.validate' --format=pretty | tee build/check-ingress.json
+	@jq -e '.valid == true' build/check-ingress.json > /dev/null \
+		|| { echo "check-ingress: the posture case is invalid — findings above"; exit 1; }
+
+# Gate the kill path against the drill record: the case's declared
+# kill path rehearsed on the record, inside the staleness clock the
+# record itself declares — a kill path never rehearsed is a promise
+# the platform has never kept, and a rehearsal grown stale is a kill
+# path that has drifted. Fails (exit 1) when the gate finds errors;
+# a stale rehearsal is a review flag, not a failure, and the verdict
+# says review.
+ingress-gate:
+	@test -f "$(INGRESS_CASE)" || { echo "usage: make ingress-gate [INGRESS_CASE=... INGRESS_DRILL=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(INGRESS_CASE)' '$(INGRESS_DRILL)' \
+		| jq -cs --arg today "$(TODAY)" --arg caseFile "$(INGRESS_CASE)" --arg drillFile "$(INGRESS_DRILL)" \
+			'{case: .[0], drill: .[1], today: $$today, caseFile: $$caseFile, drillFile: $$drillFile}' \
+		| $(OPA) eval -d policies -I 'data.ingress.gate' --format=pretty | tee build/ingress-gate.json
+	@jq -e '.valid == true' build/ingress-gate.json > /dev/null \
+		|| { echo "ingress-gate: the ingress posture gate found errors above"; exit 1; }
+
+# The done-when proof for book issue #82: a kill path declared but
+# never rehearsed is caught citing the drill record. Runs the
+# control case and drill end to end, then proves all the broken
+# variants fail loudly (or flag honestly).
+ingress-demo:
+	@echo "--- 1. the posture case validates ---"
+	@$(MAKE) check-ingress TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders hardened ---"
+	@$(MAKE) ingress-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "hardened"' build/ingress-gate.json \
+		|| { echo "FAIL: the control gate did not render the hardened verdict"; cat build/ingress-gate.json; exit 1; }
+	@jq -e '.cards | length == 10' build/ingress-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per judged item"; cat build/ingress-gate.json; exit 1; }
+	@echo "control verdict: hardened — the whole board says so, one card per judged item"
+	@echo "--- 3. a wildcard the zone cannot hold is caught ---"
+	@if $(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.broad-wildcard.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-broad.txt 2>&1; \
+		then echo "FAIL: the broad wildcard was not caught"; cat build/ingress-broad.txt; exit 1; \
+		else grep -q 'domain/too-broad' build/ingress-broad.txt \
+			|| { echo "FAIL: the case failed without the too-broad rule"; cat build/ingress-broad.txt; exit 1; }; \
+		fi
+	@grep -q "outside the platform zone" build/ingress-broad.txt \
+		|| { echo "FAIL: the finding does not name the zone it escaped"; cat build/ingress-broad.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-broad.txt; exit 1; }
+	@echo "caught as expected: domain/too-broad — the wildcard escaped dev.internal"
+	@echo "--- 4. a missing default-deny is caught ---"
+	@if $(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.no-default-deny.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-default-deny.txt 2>&1; \
+		then echo "FAIL: the missing default-deny was not caught"; cat build/ingress-default-deny.txt; exit 1; \
+		else grep -q 'requestpolicy/default-deny-required' build/ingress-default-deny.txt \
+			|| { echo "FAIL: the case failed without the default-deny rule"; cat build/ingress-default-deny.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-default-deny.txt; exit 1; }
+	@echo "caught as expected: requestpolicy/default-deny-required — an allow list without the default is not an allow list"
+	@echo "--- 5. an expired certificate is caught naming the host ---"
+	@if $(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.expired-cert.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-expired.txt 2>&1; \
+		then echo "FAIL: the expired certificate was not caught"; cat build/ingress-expired.txt; exit 1; \
+		else grep -q 'cert/expired' build/ingress-expired.txt \
+			|| { echo "FAIL: the case failed without the expired-cert rule"; cat build/ingress-expired.txt; exit 1; }; \
+		fi
+	@grep -q 'edge.dev.internal' build/ingress-expired.txt \
+		|| { echo "FAIL: the finding does not name the host the cert served"; cat build/ingress-expired.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-expired.txt; exit 1; }
+	@echo "caught as expected: cert/expired naming edge.dev.internal"
+	@echo "--- 6. a certificate inside its rotation window flags honestly, not fatally ---"
+	@$(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.near-expiry-cert.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'cert/near-expiry' build/check-ingress.json \
+		|| { echo "FAIL: the late rotation was not flagged"; cat build/check-ingress.json; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "warning")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/check-ingress.json; exit 1; }
+	@jq -e '.valid == true' build/check-ingress.json > /dev/null \
+		|| { echo "FAIL: a warning must not fail the case"; cat build/check-ingress.json; exit 1; }
+	@echo "flagged as expected: cert/near-expiry — the case stays valid, the rotation is late"
+	@echo "--- 7. an SLO without its pager is caught ---"
+	@if $(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.slo-no-pager.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-pager.txt 2>&1; \
+		then echo "FAIL: the pagerless SLO was not caught"; cat build/ingress-pager.txt; exit 1; \
+		else grep -q 'slo/pager-required' build/ingress-pager.txt \
+			|| { echo "FAIL: the case failed without the pager rule"; cat build/ingress-pager.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-pager.txt; exit 1; }
+	@echo "caught as expected: slo/pager-required — an SLO nobody pages is a promise nobody keeps"
+	@echo "--- 8. an unlogged route class is caught naming the class ---"
+	@if $(MAKE) check-ingress INGRESS_CASE=examples/ingress/broken/case.audit-gap.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-gap.txt 2>&1; \
+		then echo "FAIL: the audit gap was not caught"; cat build/ingress-gap.txt; exit 1; \
+		else grep -q 'audit/class-unlogged' build/ingress-gap.txt \
+			|| { echo "FAIL: the case failed without the audit-coverage rule"; cat build/ingress-gap.txt; exit 1; }; \
+		fi
+	@grep -q 'partner-api' build/ingress-gap.txt \
+		|| { echo "FAIL: the finding does not name the unlogged class"; cat build/ingress-gap.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-ingress.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-gap.txt; exit 1; }
+	@echo "caught as expected: audit/class-unlogged naming partner-api"
+	@echo "--- 9. a kill path never rehearsed is caught citing the drill record ---"
+	@if $(MAKE) ingress-gate INGRESS_DRILL=examples/ingress/broken/drill.never-rehearsed.yaml TODAY=$(ANCHOR_TODAY) > build/ingress-never.txt 2>&1; \
+		then echo "FAIL: the unrehearsed kill path was not caught"; cat build/ingress-never.txt; exit 1; \
+		else grep -q 'killpath/never-rehearsed' build/ingress-never.txt \
+			|| { echo "FAIL: the gate failed without the rehearsal rule"; cat build/ingress-never.txt; exit 1; }; \
+		fi
+	@grep -q 'drill.never-rehearsed.yaml' build/ingress-never.txt \
+		|| { echo "FAIL: the finding does not cite the drill record"; cat build/ingress-never.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/ingress-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/ingress-never.txt; exit 1; }
+	@echo "caught as expected: killpath/never-rehearsed citing drill.never-rehearsed.yaml"
+	@echo "--- 10. a rehearsal grown stale flags for review, not failure ---"
+	@$(MAKE) ingress-gate INGRESS_DRILL=examples/ingress/broken/drill.stale-rehearsal.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'killpath/stale-rehearsal' build/ingress-gate.json \
+		|| { echo "FAIL: the stale rehearsal was not flagged"; cat build/ingress-gate.json; exit 1; }
+	@grep -q '"verdict": "review"' build/ingress-gate.json \
+		|| { echo "FAIL: the stale rehearsal did not render the review verdict"; cat build/ingress-gate.json; exit 1; }
+	@jq -e '.cards[] | select(.area == "kill path" and .verdict == "review")' build/ingress-gate.json > /dev/null \
+		|| { echo "FAIL: the kill-path card did not render review"; cat build/ingress-gate.json; exit 1; }
+	@echo "flagged as expected: killpath/stale-rehearsal — the verdict is review, the gate stays green"
+	@echo "--- ingress demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -662,7 +800,9 @@ examples:
 	$(MAKE) erasure-gate ERASURE_CASE=examples/erasure/case-pending.yaml TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-segment TODAY=$(ANCHOR_TODAY)
 	$(MAKE) segment-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-ingress TODAY=$(ANCHOR_TODAY)
+	$(MAKE) ingress-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo
 	$(OPA) fmt --fail -l policies

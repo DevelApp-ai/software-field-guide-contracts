@@ -1,0 +1,53 @@
+# BROKEN VARIANT — the audit-coverage gap — The Software Field
+# Guide, issue #82.
+#
+# The control case with partner-api missing from the logged route
+# classes: the edge still carries the partner traffic, but the
+# audit never sees it. Traffic the edge carries but the audit
+# cannot answer for is the gap this validator exists to find, and it
+# must flag the case exactly once, naming the unlogged class.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+zone: dev.internal
+
+requestPolicy:
+  defaultDeny: true
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  - pattern: "*.dev.internal"
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+# partner-api carried but never logged: the audit gap.
+loggedRouteClasses:
+  - developer-app
+  - health-check
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone

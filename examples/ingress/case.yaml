@@ -1,0 +1,79 @@
+# Ingress posture case — The Software Field Guide, issue #82.
+#
+# The secure-developer-ingress chapter's YAML: the platform's edge
+# posture as data — the DNS containment boundary (the zone), the
+# request policy (default-deny and the decision that backs it), the
+# allowed domain patterns (concrete hosts and wildcards the zone
+# can contain), the TLS certificates with their rotation clocks,
+# the service level objectives with the pagers behind them, the
+# route classes the edge carries and the ones the audit logs, and
+# the kill path the platform swears it can pull. The validator is
+# honest about what it models: pattern breadth, certificate
+# windows, pager wiring, audit coverage, and rehearsal staleness —
+# not pretending to full managed-gateway semantics.
+#
+# The estate is seeded, after the chapter's worked example: an
+# anonymous developer-ingress platform, its edge in dev.internal,
+# one external partner host, and a kill path rehearsed on the
+# record. Example dates are chosen relative to the CI anchor date
+# 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+# The DNS containment boundary: every wildcard the case declares is
+# held inside this zone, and the case is judged against it.
+zone: dev.internal
+
+requestPolicy:
+  # Deny by default, admit by exception: the allow list stays an
+  # allow list only while the default is deny.
+  defaultDeny: true
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  # A wildcard, contained: everything under the branch, inside the
+  # zone the case declares.
+  - pattern: "*.dev.internal"
+    intent: every developer app tenant, inside the platform zone
+  # A concrete host: the narrowest admit the platform can grant.
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  # The edge's own certificate, well outside its rotation window.
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+  # The partner-facing certificate, 56 days out — beyond its own
+  # 21-day rotation clock.
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+# Every route class the edge carries, logged: traffic the audit
+# sees is traffic the audit can answer for.
+loggedRouteClasses:
+  - developer-app
+  - partner-api
+  - health-check
+
+# The kill path: the lever the platform swears it can pull. Declared
+# here, rehearsed on the drill record — a kill path rehearsed once
+# and never again is a kill path that has drifted.
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone

@@ -1,0 +1,53 @@
+# BROKEN VARIANT — the missing default-deny — The Software Field
+# Guide, issue #82.
+#
+# The control case with its request policy's defaultDeny set to
+# false: the edge admits everything its allowed domains do not
+# name — an allow list that is not an allow list. Without the
+# default, the domains are suggestions, and the validator must flag
+# the case exactly once at case time.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+zone: dev.internal
+
+requestPolicy:
+  defaultDeny: false
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  - pattern: "*.dev.internal"
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+loggedRouteClasses:
+  - developer-app
+  - partner-api
+  - health-check
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone

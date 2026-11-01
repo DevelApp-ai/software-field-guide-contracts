@@ -1,0 +1,56 @@
+# BROKEN VARIANT — the near-expiry certificate — The Software Field
+# Guide, issue #82.
+#
+# The control case with its edge certificate inside its own
+# rotation window: notAfter 2026-11-10, twenty-one days after the
+# anchor date, against a thirty-day clock. The certificate is
+# valid — the case does not fail — but the rotation is late, and the
+# validator must flag it exactly once, honestly, as a warning: the
+# cert that rotates late is the cert that expires.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+zone: dev.internal
+
+requestPolicy:
+  defaultDeny: true
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  - pattern: "*.dev.internal"
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  # Valid, but inside its rotation window: twenty-one days left
+  # against a thirty-day clock.
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2026-11-10
+    rotateByDays: 30
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+loggedRouteClasses:
+  - developer-app
+  - partner-api
+  - health-check
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone
