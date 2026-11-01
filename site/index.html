@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate, Segment Gate — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -164,6 +164,7 @@
 		<button role="tab" id="tab-alerts" aria-selected="false">Alert gate</button>
 		<button role="tab" id="tab-actions" aria-selected="false">Action scope</button>
 		<button role="tab" id="tab-erasure" aria-selected="false">Erasure gate</button>
+		<button role="tab" id="tab-segment" aria-selected="false">Segment gate</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -221,6 +222,14 @@
 		<textarea id="editor-erasure-case" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-segment">
+		<p class="hint">Gate <strong>N fabric renders</strong> and a <strong>promotion PR</strong> against the <strong>segment contract</strong> — one contract, then every fabric's rendered copy of it, then the flow evidence a promotion to enforce must cite. A rule missing from one render, a render carrying a rule the contract never had, a direction or type or port disagreement, a promotion claiming evidence nobody read: all caught. A rule nothing exercised is flagged for review, not failed — a dead rule is a review flag. A rule is not enforced until every fabric says so. Try the loaded example, then delete the <code>cloud</code> render of <code>R2</code> and watch the gate catch it citing both files.</p>
+		<label for="editor-segment-contract">Segment contract (segments, rules, TTL-bound exceptions)</label>
+		<textarea id="editor-segment-contract" spellcheck="false"></textarea>
+		<label for="editor-segment-evidence">Evidence (fabric renders, flow window, promotion PR)</label>
+		<textarea id="editor-segment-evidence" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -236,7 +245,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -249,6 +258,7 @@ const tabs = [
 	{ id: 'alerts', pkg: 'alerts' },
 	{ id: 'actions', pkg: 'actions' },
 	{ id: 'erasure', pkg: 'erasure' },
+	{ id: 'segment', pkg: 'segment' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -580,7 +590,66 @@ const examples = {
 			{ store: 'corpus-vector-index', sweptOn: '2026-10-04', sweptBy: 'index rebuild without the tenant\'s corpus; embedding count verified' },
 		],
 	},
+	segmentContract: {
+		version: 1,
+		reviewedOn: '2026-10-01',
+		owner: 'Platform team',
+		segments: ['web', 'api', 'db', 'worker', 'external'],
+		rules: [
+			{ id: 'R1', from: 'web', to: 'api', type: 'tcp', port: 443, direction: 'egress', mode: 'enforce' },
+			{ id: 'R2', from: 'api', to: 'db', type: 'tcp', port: 5432, direction: 'egress', mode: 'enforce' },
+			{ id: 'R3', from: 'worker', to: 'api', type: 'tcp', port: 443, direction: 'egress', mode: 'audit' },
+			{
+				id: 'R4',
+				from: 'external',
+				to: 'web',
+				type: 'tcp',
+				port: 443,
+				direction: 'ingress',
+				mode: 'enforce',
+				exceptions: [{
+					reason: "pen-test window — the load generator's traffic is expected until the contract is re-rendered",
+					expiresOn: '2026-12-01',
+				}],
+			},
+		],
+	},
+	segmentEvidence: {
+		renders: {
+			version: 1,
+			reviewedOn: '2026-10-18',
+			fabrics: ['cloud', 'host-firewall'],
+			rules: [
+				{ fabric: 'cloud', rule: 'R1', direction: 'egress', type: 'tcp', port: 443 },
+				{ fabric: 'host-firewall', rule: 'R1', direction: 'egress', type: 'tcp', port: 443 },
+				{ fabric: 'cloud', rule: 'R2', direction: 'egress', type: 'tcp', port: 5432 },
+				{ fabric: 'host-firewall', rule: 'R2', direction: 'egress', type: 'tcp', port: 5432 },
+				{ fabric: 'cloud', rule: 'R3', direction: 'egress', type: 'tcp', port: 443 },
+				{ fabric: 'host-firewall', rule: 'R3', direction: 'egress', type: 'tcp', port: 443 },
+				{ fabric: 'cloud', rule: 'R4', direction: 'ingress', type: 'tcp', port: 443 },
+				{ fabric: 'host-firewall', rule: 'R4', direction: 'ingress', type: 'tcp', port: 443 },
+			],
+		},
+		flows: {
+			reviewedOn: '2026-10-16',
+			window: { from: '2026-10-01', to: '2026-10-15' },
+			flows: [
+				{ from: 'web', to: 'api', type: 'tcp', port: 443, count: 812 },
+				{ from: 'api', to: 'db', type: 'tcp', port: 5432, count: 147 },
+				{ from: 'worker', to: 'api', type: 'tcp', port: 443, count: 14 },
+				{ from: 'external', to: 'web', type: 'tcp', port: 443, count: 2105 },
+			],
+		},
+		promotion: {
+			pr: 'PR-512',
+			rule: 'R3',
+			to: 'enforce',
+			evidenceFile: 'flows.yaml',
+			window: { from: '2026-10-01', to: '2026-10-15' },
+		},
+	},
 };
+
 examples.bundle = {
 	enclaves: [examples.enclave, {
 		enclave: 'payments',
@@ -626,7 +695,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -661,6 +730,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('erasure-keys'), examples.erasureKeys],
 			[editor('erasure-case'), examples.erasureCase],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'segment') {
+		for (const [el, value] of [
+			[editor('segment-contract'), examples.segmentContract],
+			[editor('segment-evidence'), examples.segmentEvidence],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -807,6 +883,30 @@ function renderErasure(result) {
 	findingsBox.append(card);
 }
 
+function renderSegment(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'verdict';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' ' + result.verdict;
+	card.append(chip, title);
+	const head = document.createElement('p');
+	head.className = 'summary';
+	head.textContent = 'one card per contract rule: consistent, audit, mismatched, missing, or dead';
+	card.append(head);
+	for (const rule of result.rules) {
+		const row = document.createElement('p');
+		row.className = rule.verdict === 'consistent' || rule.verdict === 'audit' ? 'summary' : 'msg';
+		row.textContent = rule.rule + '  →  ' + rule.verdict + '  (' + rule.detail + ')';
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -909,6 +1009,25 @@ validateBtn.addEventListener('click', async () => {
 			return;
 		}
 		input = { keys: keys.value, case: erasureCase.value, today: '2026-10-20' };
+	} else if (active === 'segment') {
+		const contract = parseEditor('segment-contract');
+		const evidence = parseEditor('segment-evidence');
+		if (contract.error) {
+			setStatus('Segment contract: ' + contract.error, true);
+			return;
+		}
+		if (evidence.error) {
+			setStatus('Evidence: ' + evidence.error, true);
+			return;
+		}
+		input = {
+			contract: contract.value,
+			...evidence.value,
+			today: '2026-10-20',
+			contractFile: 'segment-contract.yaml',
+			rendersFile: 'segment-renders.yaml',
+			flowsFile: 'flows.yaml',
+		};
 	} else {
 		const parsed = parseEditor(active);
 		if (parsed.error) {
@@ -962,6 +1081,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderErasure(result);
 			}
+		} else if (active === 'segment') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.rules) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderSegment(result);
+			}
 		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
@@ -992,6 +1117,9 @@ exampleBtn.addEventListener('click', () => {
 	} else if (active === 'erasure') {
 		editor('erasure-keys').value = JSON.stringify(examples.erasureKeys, null, 2);
 		editor('erasure-case').value = JSON.stringify(examples.erasureCase, null, 2);
+	} else if (active === 'segment') {
+		editor('segment-contract').value = JSON.stringify(examples.segmentContract, null, 2);
+		editor('segment-evidence').value = JSON.stringify(examples.segmentEvidence, null, 2);
 	} else {
 		editor(active).value = JSON.stringify(examples[active], null, 2);
 	}
