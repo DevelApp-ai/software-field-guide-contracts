@@ -1,0 +1,57 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/citizen-guardrails.schema.json",
+	"title": "Platform guardrail registry",
+	"description": "The platform guardrail registry, as defined in The Software Field Guide, issue #84: the citizen-development-on-spec-rails chapter's YAML — the platform's word. The registry declares the data rails a citizen app's binding may ride, and the platform floor each guardrail must meet. A binding that does not ride a declared rail is an escape hatch; a guardrail built below its floor is guardrail drift after a platform upgrade. The registry is maintained by the platform team, not the citizen. This schema mirrors the shape rules of the Rego validator (policies/citizen); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future — and the joins the gate performs against the manifest and the spec.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "dataRails", "platformFloor"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the registry. Floors are versioned like the platform that sets them."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the registry was last reviewed, YYYY-MM-DD. The validator flags dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the registry. Floors without an owner are floors nobody raises."
+		},
+		"dataRails": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The data rails: the only ways a citizen app's binding may reach data on this platform.",
+			"items": {
+				"type": "string",
+				"minLength": 1
+			}
+		},
+		"platformFloor": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The platform floor: the minimum version each guardrail must meet, declared by guardrail name.",
+			"items": {
+				"type": "object",
+				"required": ["name", "floor"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The guardrail the floor governs. Floors are declared by guardrail name."
+					},
+					"floor": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "The minimum version that counts as current. Below it is guardrail drift after a platform upgrade."
+					}
+				}
+			}
+		}
+	}
+}

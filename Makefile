@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the eight wasm bundles into build/wasm/
+#   make build         compile the eleven wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -88,6 +88,9 @@ FLOWS ?= examples/segment/flows.yaml
 PROMOTION ?= examples/segment/promotion.yaml
 INGRESS_CASE ?= examples/ingress/case.yaml
 INGRESS_DRILL ?= examples/ingress/drill.yaml
+CITIZEN_MANIFEST ?= examples/citizen/manifest.yaml
+CITIZEN_SPEC ?= examples/citizen/spec.yaml
+CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -98,6 +101,7 @@ INGRESS_DRILL ?= examples/ingress/drill.yaml
 	check-erasure erasure-gate erasure-demo \
 	check-segment segment-gate segment-demo \
 	check-ingress ingress-gate ingress-demo \
+	check-citizen citizen-gate citizen-demo \
 	examples ci
 
 fmt:
@@ -142,6 +146,9 @@ build:
 	$(OPA) build -t wasm -e ingress/audit -o build/ingress.tar.gz policies
 	tar -xzf build/ingress.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/ingress.wasm
+	$(OPA) build -t wasm -e citizen/audit -o build/citizen.tar.gz policies
+	tar -xzf build/citizen.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/citizen.wasm
 
 site: build
 	rm -rf site-build
@@ -782,6 +789,111 @@ ingress-demo:
 	@echo "flagged as expected: killpath/stale-rehearsal — the verdict is review, the gate stays green"
 	@echo "--- ingress demo: all done-when proofs passed ---"
 
+# Validate the citizen app manifest alone: components with their
+# behaviors, data bindings with names, modes, and rails, actions
+# used, guardrails with versions — the citizen-built app as data,
+# its own stamps and shapes honest before any join runs.
+check-citizen:
+	@test -f "$(CITIZEN_MANIFEST)" || { echo "usage: make check-citizen [CITIZEN_MANIFEST=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CITIZEN_MANIFEST)' \
+		| jq -cs --arg today "$(TODAY)" --arg manifestFile "$(CITIZEN_MANIFEST)" '{manifest: .[0], today: $$today, manifestFile: $$manifestFile}' \
+		| $(OPA) eval -d policies -I 'data.citizen.validate' --format=pretty | tee build/check-citizen.json
+	@jq -e '.valid == true' build/check-citizen.json > /dev/null \
+		|| { echo "check-citizen: the app manifest is invalid — findings above"; exit 1; }
+
+# Gate the citizen app against its spec and the platform guardrail
+# registry — advisor, not blocker: an escape hatch, an action
+# outside the spec's rails, a behavior without spec coverage, and a
+# guardrail below the platform floor are advisories that keep this
+# gate green with the advice on the record. Fails (exit 1) only
+# when a document is unreadable — the one red the advisor can show.
+citizen-gate:
+	@test -f "$(CITIZEN_MANIFEST)" || { echo "usage: make citizen-gate [CITIZEN_MANIFEST=... CITIZEN_SPEC=... CITIZEN_REGISTRY=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CITIZEN_MANIFEST)' '$(CITIZEN_SPEC)' '$(CITIZEN_REGISTRY)' \
+		| jq -cs --arg today "$(TODAY)" --arg manifestFile "$(CITIZEN_MANIFEST)" --arg specFile "$(CITIZEN_SPEC)" --arg registryFile "$(CITIZEN_REGISTRY)" \
+			'{manifest: .[0], spec: .[1], registry: .[2], today: $$today, manifestFile: $$manifestFile, specFile: $$specFile, registryFile: $$registryFile}' \
+		| $(OPA) eval -d policies -I 'data.citizen.gate' --format=pretty | tee build/citizen-gate.json
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "citizen-gate: a document the advisor cannot read — findings above"; exit 1; }
+
+# The done-when proof for book issue #84: the citizen spec-rails
+# linter advises at the citizen's PR gate. Runs the control app end
+# to end, then proves every drift variant bites exactly once — as an
+# advisory, with the gate staying green — and that a manifest the
+# advisor cannot read fails honestly.
+citizen-demo:
+	@echo "--- 1. the app manifest validates ---"
+	@$(MAKE) check-citizen TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders aligned ---"
+	@$(MAKE) citizen-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "aligned"' build/citizen-gate.json \
+		|| { echo "FAIL: the control gate did not render the aligned verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.cards | length == 8' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per judged item"; cat build/citizen-gate.json; exit 1; }
+	@echo "control verdict: aligned — the whole board says so, one card per judged item"
+	@echo "--- 3. an escape hatch is caught advising ---"
+	@$(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.escape-hatch.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'binding/escape-hatch' build/citizen-gate.json \
+		|| { echo "FAIL: the escape hatch was not advised"; cat build/citizen-gate.json; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "advisory")] | length' build/citizen-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/citizen-gate.json; exit 1; }
+	@grep -q '"verdict": "advises changes"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the advises-changes verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: an advisory must not fail the gate"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.cards[] | select(.area == "data bindings" and .verdict == "advises")' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: the binding card did not render advises"; cat build/citizen-gate.json; exit 1; }
+	@echo "advised as expected: binding/escape-hatch — the gate stays green, the advice is on the record"
+	@echo "--- 4. an action outside the spec's rails is caught advising ---"
+	@$(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.unspecced-action.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'action/outside-rails' build/citizen-gate.json \
+		|| { echo "FAIL: the unspecced action was not advised"; cat build/citizen-gate.json; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "advisory")] | length' build/citizen-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/citizen-gate.json; exit 1; }
+	@grep -q '"verdict": "advises changes"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the advises-changes verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: an advisory must not fail the gate"; cat build/citizen-gate.json; exit 1; }
+	@echo "advised as expected: action/outside-rails — the gate stays green, the advice is on the record"
+	@echo "--- 5. a behavior without spec coverage is caught advising ---"
+	@$(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.uncovered-behavior.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'behavior/uncovered-by-spec' build/citizen-gate.json \
+		|| { echo "FAIL: the uncovered behavior was not advised"; cat build/citizen-gate.json; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "advisory")] | length' build/citizen-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/citizen-gate.json; exit 1; }
+	@grep -q '"verdict": "advises changes"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the advises-changes verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: an advisory must not fail the gate"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.cards[] | select(.area == "spec coverage" and .verdict == "advises")' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: the coverage card did not render advises"; cat build/citizen-gate.json; exit 1; }
+	@echo "advised as expected: behavior/uncovered-by-spec — the gate stays green, the advice is on the record"
+	@echo "--- 6. a guardrail below the platform floor is caught advising ---"
+	@$(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.stale-guardrail.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'guardrail/below-floor' build/citizen-gate.json \
+		|| { echo "FAIL: the below-floor guardrail was not advised"; cat build/citizen-gate.json; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "advisory")] | length' build/citizen-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/citizen-gate.json; exit 1; }
+	@grep -q '"verdict": "advises changes"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the advises-changes verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: an advisory must not fail the gate"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.cards[] | select(.area == "guardrails" and .verdict == "advises")' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: the guardrail card did not render advises"; cat build/citizen-gate.json; exit 1; }
+	@echo "advised as expected: guardrail/below-floor — the gate stays green, the advice is on the record"
+	@echo "--- 7. a manifest the advisor cannot read fails honestly ---"
+	@if $(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.no-version.yaml TODAY=$(ANCHOR_TODAY) > build/citizen-no-version.txt 2>&1; \
+		then echo "FAIL: the unreadable manifest passed the gate"; cat build/citizen-no-version.txt; exit 1; \
+		else grep -q 'manifest/version-required' build/citizen-no-version.txt \
+			|| { echo "FAIL: the gate failed without the version rule"; cat build/citizen-no-version.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/citizen-gate.json; exit 1; }
+	@echo "caught as expected: manifest/version-required — the advisor refuses to answer on a document it cannot read"
+	@echo "--- citizen demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -802,7 +914,9 @@ examples:
 	$(MAKE) segment-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-ingress TODAY=$(ANCHOR_TODAY)
 	$(MAKE) ingress-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-citizen TODAY=$(ANCHOR_TODAY)
+	$(MAKE) citizen-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo
 	$(OPA) fmt --fail -l policies

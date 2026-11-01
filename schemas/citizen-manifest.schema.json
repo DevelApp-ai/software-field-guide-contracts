@@ -1,0 +1,111 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/citizen-manifest.schema.json",
+	"title": "Citizen app manifest",
+	"description": "The citizen app manifest, as defined in The Software Field Guide, issue #84: the citizen-development-on-spec-rails chapter's YAML — the citizen-built app as data. The manifest declares the components the app ships and the behavior each declares, the data bindings it opens and the rail each rides, the platform actions it uses, and the guardrails it builds against with their versions. Judged at the citizen's PR gate against the app's spec and the platform guardrail registry, as an advisor: an escape hatch (a binding that goes around the registry's rails), an action outside the spec's rails, a component behavior the spec's coverage never declares, and a guardrail built below the registry's platform floor are all advised, never blocked. This schema mirrors the shape rules of the Rego validator (policies/citizen); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, no duplicated actions, and the four drifts judged at the join.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "app", "components", "dataBindings", "actions", "guardrails"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the manifest. The app's posture is versioned like the app."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the manifest was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the citizen app. A citizen app with an owner and a review cadence is the discipline."
+		},
+		"app": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The name of the app the manifest describes. Advice lands on an app, not on a file."
+		},
+		"components": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The components the app ships, each with the behavior it declares. Every declared behavior must be answered for by the spec's coverage.",
+			"items": {
+				"type": "object",
+				"required": ["name", "behavior"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The component's name. The advice cards render one row per component."
+					},
+					"behavior": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The behavior the component declares, in words. A behavior the spec's coverage never declares is behavior nobody agreed to."
+					}
+				}
+			}
+		},
+		"dataBindings": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The data bindings the app opens, each naming the rail it rides. A binding that does not ride a rail the registry declares is an escape hatch — a shortcut the platform cannot see.",
+			"items": {
+				"type": "object",
+				"required": ["name", "mode", "via"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The binding's name. Advice names the binding it lands on."
+					},
+					"mode": {
+						"type": "string",
+						"enum": ["read", "write"],
+						"description": "The binding's mode. The linter models read and write; anything else is a mode it never agreed to model."
+					},
+					"via": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The rail the binding rides, e.g. platform-data-api. The gate judges the rail against the registry's declared dataRails."
+					}
+				}
+			}
+		},
+		"actions": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The platform actions the app uses, as plain strings. Every action used must be a rail the app's spec grants.",
+			"items": {
+				"type": "string",
+				"minLength": 1
+			}
+		},
+		"guardrails": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The guardrails the app builds against, with their versions. The gate judges each version against the registry's platform floor.",
+			"items": {
+				"type": "object",
+				"required": ["name", "version"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The guardrail's name. The registry declares floors by name."
+					},
+					"version": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "The guardrail version the app builds against. Below the platform floor is guardrail drift after a platform upgrade."
+					}
+				}
+			}
+		}
+	}
+}

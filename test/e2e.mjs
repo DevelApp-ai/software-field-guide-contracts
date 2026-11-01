@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the ten policy.wasm builds and evaluates
+// End-to-end smoke test: loads the eleven policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -221,6 +221,7 @@ const actionsPolicy = await load('actions')
 const erasurePolicy = await load('erasure')
 const segmentPolicy = await load('segment')
 const ingressPolicy = await load('ingress')
+const citizenPolicy = await load('citizen')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1105,6 +1106,136 @@ r = ingressAudit({
 assert(
 	r.findings.some((f) => f.rule === 'drill/killpath-unknown' && /ingress-case\.yaml/.test(f.message) && /drill\.yaml/.test(f.message)),
 	'a rehearsal for a kill path the case never declared is caught in wasm, citing both files',
+)
+
+// --- citizen --------------------------------------------------------------
+//
+// Judged by the composed citizen/audit entrypoint — the control
+// renders aligned with one card per judged item, every seeded drift
+// is advised (an advisor, not a blocker: the gate stays green with
+// the advice on the record), and a manifest the advisor cannot read
+// fails honestly.
+
+const citizenManifest = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Storefront team',
+	app: 'expense-approver',
+	components: [
+		{ name: 'claim-form', behavior: 'submits an expense claim' },
+		{ name: 'claim-rules', behavior: 'approves a claim inside its policy' },
+	],
+	dataBindings: [
+		{ name: 'claims-store', mode: 'read', via: 'platform-data-api' },
+		{ name: 'audit-log', mode: 'write', via: 'platform-data-api' },
+	],
+	actions: ['expense.submit', 'expense.approve'],
+	guardrails: [
+		{ name: 'data-guardrail', version: 3 },
+		{ name: 'action-guardrail', version: 2 },
+	],
+}
+
+const citizenSpec = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Storefront team',
+	actions: ['expense.submit', 'expense.approve'],
+	coverage: ['submits an expense claim', 'approves a claim inside its policy'],
+}
+
+const citizenRegistry = {
+	version: 1,
+	reviewedOn: '2026-10-15',
+	owner: 'Platform team',
+	dataRails: ['platform-data-api'],
+	platformFloor: [
+		{ name: 'data-guardrail', floor: 3 },
+		{ name: 'action-guardrail', floor: 2 },
+	],
+}
+
+const citizenAudit = (extra) => citizenPolicy.evaluate({
+	manifest: citizenManifest,
+	spec: citizenSpec,
+	registry: citizenRegistry,
+	today,
+	manifestFile: 'manifest.yaml',
+	specFile: 'spec.yaml',
+	registryFile: 'guardrails.yaml',
+	...extra,
+})[0].result
+
+r = citizenAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'aligned' && r.cards.length === 8,
+	'the citizen control passes the audit in wasm and renders aligned',
+)
+
+r = citizenAudit({
+	manifest: {
+		...citizenManifest,
+		dataBindings: citizenManifest.dataBindings.map((b) => b.name === 'audit-log' ? { ...b, via: 'raw-sql' } : b),
+	},
+})
+assert(
+	hasFinding(r, 'binding/escape-hatch') && r.valid === true && r.verdict === 'advises changes',
+	'an escape hatch is advised in wasm and the gate stays green',
+)
+assert(
+	r.findings.some((f) => f.rule === 'binding/escape-hatch' && /manifest\.yaml/.test(f.message) && /guardrails\.yaml/.test(f.message)),
+	'the escape-hatch advice cites both files in wasm',
+)
+assert(
+	r.cards.some((c) => c.area === 'data bindings' && c.verdict === 'advises'),
+	'the binding card renders advises in wasm',
+)
+
+r = citizenAudit({
+	manifest: { ...citizenManifest, actions: [...citizenManifest.actions, 'expense.purge'] },
+})
+assert(
+	hasFinding(r, 'action/outside-rails') && r.valid === true && r.verdict === 'advises changes',
+	'an action outside the rails the spec granted is advised in wasm, never blocked',
+)
+
+r = citizenAudit({
+	manifest: {
+		...citizenManifest,
+		components: citizenManifest.components.map((c) => c.name === 'claim-rules' ? { ...c, behavior: 'deletes old claims' } : c),
+	},
+})
+assert(
+	hasFinding(r, 'behavior/uncovered-by-spec') && r.valid === true && r.verdict === 'advises changes',
+	'a behavior without spec coverage is advised in wasm',
+)
+
+r = citizenAudit({
+	manifest: {
+		...citizenManifest,
+		guardrails: citizenManifest.guardrails.map((g) => g.name === 'data-guardrail' ? { ...g, version: 2 } : g),
+	},
+})
+assert(
+	hasFinding(r, 'guardrail/below-floor') && r.valid === true && r.verdict === 'advises changes',
+	'a guardrail below the platform floor is advised in wasm',
+)
+
+r = citizenAudit({
+	manifest: {
+		...citizenManifest,
+		guardrails: [...citizenManifest.guardrails, { name: 'review-guardrail', version: 1 }],
+	},
+})
+assert(
+	hasFinding(r, 'guardrail/unknown') && r.valid === true && r.verdict === 'advises changes',
+	'a guardrail the registry never heard of is advised in wasm',
+)
+
+r = citizenAudit({ manifest: { ...citizenManifest, version: null } })
+assert(
+	hasFinding(r, 'manifest/version-required') && r.valid === false && r.verdict === 'unreadable',
+	'a manifest the advisor cannot read fails honestly in wasm',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

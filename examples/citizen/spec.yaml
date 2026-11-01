@@ -1,0 +1,24 @@
+# App spec — the rails — The Software Field Guide, issue #84.
+#
+# The citizen app's own spec: the platform actions its rails grant
+# and the behaviors its coverage declares. The manifest is judged
+# against this document at the gate — an action used that the rails
+# never granted, a component behavior the coverage never declared:
+# all advised. The spec is the agreement; the app drifts, the spec
+# holds.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Storefront team
+
+# The action rails: the platform actions this spec authorizes for
+# the expense-approver app.
+actions:
+  - expense.submit
+  - expense.approve
+
+# The behaviors this spec's coverage declares — every behavior a
+# component declares must be answered for here.
+coverage:
+  - submits an expense claim
+  - approves a claim inside its policy

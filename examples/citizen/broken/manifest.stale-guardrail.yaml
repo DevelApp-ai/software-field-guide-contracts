@@ -1,0 +1,56 @@
+# Citizen app manifest — The Software Field Guide, issue #84.
+#
+# The citizen-development-on-spec-rails chapter's YAML: the
+# citizen-built app as data — the components it ships and the
+# behavior each declares, the data bindings it opens and the rail
+# each rides, the platform actions it uses, and the guardrails it
+# builds against with their versions. Judged at the gate against the
+# app's spec (the rails the spec grants and the behaviors its
+# coverage declares) and the platform guardrail registry (the rails
+# a binding may ride and the floor each guardrail must meet). The
+# linter is honest about what it models: escape hatches, actions
+# outside the rails, behaviors without spec coverage, and guardrail
+# versions against the floor — not the full semantics of any real
+# low-code platform.
+#
+# The app is seeded, after the chapter's worked example: an
+# expense-approver app a store-team citizen built on the platform's
+# rails. Example dates are chosen relative to the CI anchor date
+# 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Storefront team
+app: expense-approver
+
+# The components the app ships, each with the behavior it declares —
+# the spec's coverage must answer for every behavior declared here.
+components:
+  - name: claim-form
+    behavior: submits an expense claim
+  - name: claim-rules
+    behavior: approves a claim inside its policy
+
+# The data bindings the app opens, each riding a rail the registry
+# declares — a binding that goes around the rails is an escape
+# hatch, and the platform cannot see it.
+dataBindings:
+  - name: claims-store
+    mode: read
+    via: platform-data-api
+  - name: audit-log
+    mode: write
+    via: platform-data-api
+
+# The platform actions the app uses, all rails the spec grants.
+actions:
+  - expense.submit
+  - expense.approve
+
+# The guardrails the app builds against, with their versions — the
+# registry's platform floor is the word on whether they are current.
+guardrails:
+  - name: data-guardrail
+    version: 2
+  - name: action-guardrail
+    version: 2
