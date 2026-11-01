@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the seven policy.wasm builds and evaluates
+// End-to-end smoke test: loads the eight policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -218,6 +218,7 @@ const obsBreachObservations = [
 
 const obsPolicy = await load('obs')
 const actionsPolicy = await load('actions')
+const erasurePolicy = await load('erasure')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -696,5 +697,104 @@ r = actionsAudit({
 	},
 })
 assert(hasFinding(r, 'manifest/stage-contradiction') && r.valid === false, 'read-only agent granted a write is caught in wasm')
+
+// --- erasure (mirror the unit-test fixture) -----------------------------------
+
+const dekRegistry = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	keys: [
+		{ dek: 'tenant-acme-dek-004', tenant: 'tenant-acme', state: 'destroyed', destroyedAt: '2026-10-02', destroyedBy: 'KMS DestroyKey in change CHG-4471; key material unrecoverable, cf. runbook RB-014' },
+		{ dek: 'tenant-globex-dek-002', tenant: 'tenant-globex', state: 'destroyed', destroyedAt: '2026-10-06', destroyedBy: 'KMS DestroyKey in change CHG-4488; key material unrecoverable, cf. runbook RB-014' },
+		{ dek: 'tenant-initech-dek-001', tenant: 'tenant-initech', state: 'active' },
+	],
+}
+
+const forgottenCase = {
+	owner: 'Platform team',
+	reviewedOn: '2026-10-19',
+	tenant: 'tenant-acme',
+	requestedOn: '2026-10-01',
+	requestedBy: 'DSR-2026-041 (tenant offboarding erasure request)',
+	status: 'closed',
+	stores: [
+		{ name: 'postgres-primary', kind: 'primary' },
+		{ name: 'postgres-replica-eu', kind: 'replica' },
+		{ name: 'corpus-vector-index', kind: 'vector-store' },
+		{ name: 'nightly-backups', kind: 'backup', expiresOn: '2026-10-15' },
+	],
+	sweeps: [
+		{ store: 'postgres-primary', sweptOn: '2026-10-02', sweptBy: 'DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan' },
+		{ store: 'postgres-replica-eu', sweptOn: '2026-10-03', sweptBy: 'replica catch-up confirmed; the tenant-id scan returns zero rows on the replica' },
+		{ store: 'corpus-vector-index', sweptOn: '2026-10-04', sweptBy: "index rebuild without the tenant's corpus; embedding count verified" },
+	],
+}
+
+const pendingCase = {
+	owner: 'Platform team',
+	reviewedOn: '2026-10-19',
+	tenant: 'tenant-globex',
+	requestedOn: '2026-10-05',
+	requestedBy: 'DSR-2026-052 (tenant offboarding erasure request)',
+	status: 'open',
+	stores: [
+		{ name: 'postgres-primary', kind: 'primary' },
+		{ name: 'corpus-vector-index', kind: 'vector-store' },
+		{ name: 'nightly-backups', kind: 'backup', expiresOn: '2027-01-15' },
+	],
+	sweeps: [
+		{ store: 'postgres-primary', sweptOn: '2026-10-06', sweptBy: 'DELETE cascade from the tenant row; 208 rows removed, count verified by the tenant-id scan' },
+		{ store: 'corpus-vector-index', sweptOn: '2026-10-06', sweptBy: "index rebuild without the tenant's corpus; embedding count verified" },
+	],
+}
+
+const erasureAudit = (extra) => erasurePolicy.evaluate({
+	keys: dekRegistry,
+	case: forgottenCase,
+	today,
+	...extra,
+})[0].result
+
+r = erasureAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'forgotten' && r.stores.length === 4,
+	'destroyed-DEK control passes the audit in wasm',
+)
+assert(
+	Object.keys(r).sort().join(',') === 'findings,stores,valid,verdict',
+	'the audit answers in the stable wasm shape {valid, findings, stores, verdict}',
+)
+const replicaCard = r.stores.find((st) => st.store === 'postgres-replica-eu')
+assert(
+	replicaCard && replicaCard.verdict === 'swept' && replicaCard.detail === 'swept on 2026-10-03',
+	'the store card renders the replica swept on its record day in wasm',
+)
+
+r = erasureAudit({ case: pendingCase })
+assert(
+	r.valid === true && r.verdict === 'pending, honest',
+	'the unexpired backup renders pending, honest in wasm',
+)
+const pendingCard = r.stores.find((st) => st.store === 'nightly-backups')
+assert(
+	pendingCard && pendingCard.verdict === 'pending' && pendingCard.detail === 'backup window open until 2027-01-15',
+	'the pending store row shows the open backup window in wasm',
+)
+
+r = erasureAudit({
+	case: { ...forgottenCase, sweeps: forgottenCase.sweeps.filter((w) => w.store !== 'postgres-replica-eu') },
+})
+assert(
+	hasFinding(r, 'sweep/store-unswept') && r.valid === false,
+	'a replica without its sweep record is caught in wasm',
+)
+const unswept = r.stores.find((st) => st.store === 'postgres-replica-eu')
+assert(unswept && unswept.verdict === 'unswept', 'the unswept store row renders unswept in wasm')
+
+r = erasureAudit({ case: { ...pendingCase, status: 'closed' } })
+assert(hasFinding(r, 'case/closed-early') && r.valid === false, 'a case closed on an open backup window is caught in wasm')
+
+r = erasureAudit({ case: { ...forgottenCase, tenant: 'tenant-initech', status: 'open' } })
+assert(hasFinding(r, 'keys/dek-not-destroyed') && r.valid === false, 'a live DEK is caught in wasm')
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

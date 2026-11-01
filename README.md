@@ -10,6 +10,8 @@ And it implements the **alert-to-record linkage gate** from [book issue #69](htt
 
 And it implements the **action scope validator** from [book issue #70](https://github.com/DevelApp-ai/software-field-guide/issues/70): the micro-action vocabulary is a versioned registry — named, typed, parameter-checked actions with execution envelopes under platform ceilings — and an agent permission manifest is judged against it, default-deny: no phantom grants, no scopes on undeclared parameters, no stage that contradicts the effects it grants, no Critical action that no longer asks before it acts.
 
+And it implements the **deletion evidence validator** from [book issue #79](https://github.com/DevelApp-ai/software-field-guide/issues/79): a per-tenant right-to-be-forgotten case is judged against the DEK registry and its own sweep records — every store in the inventory swept, aged out by a declared backup window, or honestly pending; the tenant's keys destroyed with their evidence records; nothing is forgotten without a record.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -31,10 +33,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `actions/validate` | one action registry | `{"registry": {...}, "today": "YYYY-MM-DD"}` |
 | `actions/gate` | an agent manifest against the registry | `{"registry": {...}, "manifest": {...}, "today": "YYYY-MM-DD"}` |
 | `actions/audit` | both at once — one verdict, the per-agent scoping | the superset of the above |
+| `erasure/validate` | one DEK registry | `{"keys": {...}, "today": "YYYY-MM-DD"}` |
+| `erasure/gate` | an erasure case against the DEK registry | `{"keys": {...}, "case": {...}, "today": "YYYY-MM-DD"}` |
+| `erasure/audit` | both at once — one verdict, the per-store evidence | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.5** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, and the alert-to-record gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.6** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, and the deletion evidence validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -350,6 +355,72 @@ make actions-demo
 #      manifest/stage-contradiction — naming archive-reader
 ```
 
+## The deletion evidence validator
+
+The right to be forgotten is evidence, not an assertion ([book issue #79](https://github.com/DevelApp-ai/software-field-guide/issues/79)). Two documents enter: the **DEK registry** — the per-tenant data-encryption-key table, where a destroyed key carries the day it died and what destroyed it — and the **erasure case** — the per-tenant record of the request that opened it, the storage inventory, the sweep records, and the backup windows still open. Key destruction is the book's strongest verified deletion primitive; the case is the evidence that every other copy followed the key into the dark.
+
+```yaml
+# keys.yaml — the registry: a destruction without its evidence record
+# is a deletion asserted, not evidenced
+version: 1
+reviewedOn: 2026-10-01
+keys:
+  - {dek: tenant-acme-dek-004, tenant: tenant-acme, state: destroyed,
+     destroyedAt: 2026-10-02,
+     destroyedBy: "KMS DestroyKey in change CHG-4471; key material unrecoverable, cf. runbook RB-014"}
+  - {dek: tenant-initech-dek-001, tenant: tenant-initech, state: active}
+
+# case-forgotten.yaml — the per-tenant evidence: request, inventory,
+# sweep records, backup windows
+owner: Platform team
+reviewedOn: 2026-10-19
+tenant: tenant-acme
+requestedOn: 2026-10-01
+requestedBy: "DSR-2026-041 (tenant offboarding erasure request)"
+status: closed
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: postgres-replica-eu, kind: replica}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2026-10-15}
+sweeps:
+  - {store: postgres-primary, sweptOn: 2026-10-02,
+     sweptBy: "DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan"}
+  - {store: postgres-replica-eu, sweptOn: 2026-10-03,
+     sweptBy: "replica catch-up confirmed; the tenant-id scan returns zero rows on the replica"}
+```
+
+See [examples/erasure/](examples/erasure/) for the complete pair (the destroyed-DEK control and the unexpired-backup pending case) and [schemas/](schemas/) for the two JSON Schema drafts. Note what is where: the registry owns the crypto-erasure primitive; the case owns the evidence that everything else followed — and every claim in the case is judged against the registry.
+
+### What the validator enforces and proves
+
+- **Loud validation of the registry** (`erasure/validate`): missing fields, unversioned documents, stale review stamps, duplicate deks, states limited to `active`/`destroyed`, destruction dates real and not in the future — and the evidence rules: a destroyed key without its `destroyedBy` record is a deletion asserted, not evidenced; an active key with destruction evidence attached is a registry contradicting itself.
+- **The case gate** (`erasure/gate`): every store in the inventory is swept (`sweep/store-unswept` — nothing is forgotten without a record), an aged-out backup (`expired`), or honestly pending (an open window or an explicit `pendingReason`); backups declare their expiry windows; sweep records postdate the request, predate the clock, and cover declared stores only; the tenant is registered (`keys/tenant-unregistered`) with every key destroyed (`keys/dek-not-destroyed` — with the key alive the ciphertext is readable); a case closed while a store can still produce the data fails (`case/closed-early`), and a case left open with no remaining work earns the `case/closable` warning. An empty inventory is itself a finding — the gate can only judge the stores the case declares.
+- **One audit** (`erasure/audit`): the composed entrypoint for CI and the playground — registry validated, case gated, one verdict (`forgotten`, `pending, honest`, or `incomplete`), and the per-store evidence alongside: each store swept, expired, pending, or unswept, with the record that resolved it.
+
+The done-when proof from book issue #79 — a replica without its sweep record caught citing the store — runs as a single target:
+
+```sh
+make erasure-demo
+# → 1. the DEK registry validates
+#   2. the destroyed-DEK control passes and renders forgotten
+#   3. the unexpired-backup case renders pending, honest and stays open
+#   4. a replica without its sweep record is caught citing the store:
+#      sweep/store-unswept — naming postgres-replica-eu
+#   5. a case closed while a backup window is still open is caught:
+#      case/closed-early
+#   6. a tenant whose key the registry still holds live is caught:
+#      keys/dek-not-destroyed
+#   7. a sweep dated before the erasure request is caught:
+#      sweep/before-request
+#   8. a case for a tenant the registry never listed is caught:
+#      keys/tenant-unregistered
+#   9. a backup without its expiry window is caught:
+#      store/backup-expiry-required
+#  10. a destroyed key without its evidence record is caught at registry time:
+#      key/destroyed-by-required
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -366,6 +437,8 @@ make check-alerts TODAY=2026-10-20          # the alerting contract alone
 make alerts-gate   TODAY=2026-10-20         # the register against the contract
 make check-actions TODAY=2026-10-20         # the action registry alone
 make actions-gate  TODAY=2026-10-20         # the demo manifest against the registry
+make check-erasure TODAY=2026-10-20         # the DEK registry alone
+make erasure-gate  TODAY=2026-10-20         # the demo erasure case against the registry
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -376,7 +449,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -391,17 +464,18 @@ policies/authz/     lib, model, policy, decide, retro, disabled
 policies/obs/       lib, model, policy, lint, gate, audit
 policies/alerts/    lib, model, policy, gate, audit
 policies/actions/   lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions)
+policies/erasure/   lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
-                    instrumented sources), and the alerting demo (contract + incident
-                    register)
+                    instrumented sources), the alerting demo (contract + incident
+                    register), and the erasure demo (DEK registry + cases)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -411,10 +485,11 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the seven `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the eight `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
+- **Nothing is forgotten without a record.** The #69 rule, moved from alerting to erasure: a store in the inventory needs a sweep record, an aged-out backup window, or an explicit pending reason — and an unexpired backup is an honest pending state, not a failure. The case stays open until the window closes; the registry's destroyed keys carry their evidence records, because a destruction asserted is not a destruction evidenced.
 
 ## License
 
