@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the eight policy.wasm builds and evaluates
+// End-to-end smoke test: loads the nine policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -219,6 +219,7 @@ const obsBreachObservations = [
 const obsPolicy = await load('obs')
 const actionsPolicy = await load('actions')
 const erasurePolicy = await load('erasure')
+const segmentPolicy = await load('segment')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -796,5 +797,155 @@ assert(hasFinding(r, 'case/closed-early') && r.valid === false, 'a case closed o
 
 r = erasureAudit({ case: { ...forgottenCase, tenant: 'tenant-initech', status: 'open' } })
 assert(hasFinding(r, 'keys/dek-not-destroyed') && r.valid === false, 'a live DEK is caught in wasm')
+
+
+// --- segment (mirror the unit-test fixture) -----------------------------------
+
+const segmentContract = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Platform team',
+	segments: ['web', 'api', 'db', 'worker', 'external'],
+	rules: [
+		{ id: 'R1', from: 'web', to: 'api', type: 'tcp', port: 443, direction: 'egress', mode: 'enforce' },
+		{ id: 'R2', from: 'api', to: 'db', type: 'tcp', port: 5432, direction: 'egress', mode: 'enforce' },
+		{ id: 'R3', from: 'worker', to: 'api', type: 'tcp', port: 443, direction: 'egress', mode: 'audit' },
+		{
+			id: 'R4',
+			from: 'external',
+			to: 'web',
+			type: 'tcp',
+			port: 443,
+			direction: 'ingress',
+			mode: 'enforce',
+			exceptions: [{
+				reason: "pen-test window — the load generator's traffic is expected until the contract is re-rendered",
+				expiresOn: '2026-12-01',
+			}],
+		},
+	],
+}
+
+const segmentRenders = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	fabrics: ['cloud', 'host-firewall'],
+	rules: [
+		{ fabric: 'cloud', rule: 'R1', direction: 'egress', type: 'tcp', port: 443 },
+		{ fabric: 'host-firewall', rule: 'R1', direction: 'egress', type: 'tcp', port: 443 },
+		{ fabric: 'cloud', rule: 'R2', direction: 'egress', type: 'tcp', port: 5432 },
+		{ fabric: 'host-firewall', rule: 'R2', direction: 'egress', type: 'tcp', port: 5432 },
+		{ fabric: 'cloud', rule: 'R3', direction: 'egress', type: 'tcp', port: 443 },
+		{ fabric: 'host-firewall', rule: 'R3', direction: 'egress', type: 'tcp', port: 443 },
+		{ fabric: 'cloud', rule: 'R4', direction: 'ingress', type: 'tcp', port: 443 },
+		{ fabric: 'host-firewall', rule: 'R4', direction: 'ingress', type: 'tcp', port: 443 },
+	],
+}
+
+const segmentFlows = {
+	reviewedOn: '2026-10-16',
+	window: { from: '2026-10-01', to: '2026-10-15' },
+	flows: [
+		{ from: 'web', to: 'api', type: 'tcp', port: 443, count: 812 },
+		{ from: 'api', to: 'db', type: 'tcp', port: 5432, count: 147 },
+		{ from: 'worker', to: 'api', type: 'tcp', port: 443, count: 14 },
+		{ from: 'external', to: 'web', type: 'tcp', port: 443, count: 2105 },
+	],
+}
+
+const segmentPromotion = {
+	pr: 'PR-512',
+	rule: 'R3',
+	to: 'enforce',
+	evidenceFile: 'flows.yaml',
+	window: { from: '2026-10-01', to: '2026-10-15' },
+}
+
+const segmentAudit = (extra) => segmentPolicy.evaluate({
+	contract: segmentContract,
+	renders: segmentRenders,
+	flows: segmentFlows,
+	promotion: segmentPromotion,
+	today,
+	contractFile: 'segment-contract.yaml',
+	rendersFile: 'segment-renders.yaml',
+	flowsFile: 'flows.yaml',
+	...extra,
+})[0].result
+
+r = segmentAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.rules.length === 4,
+	'the segment control passes the audit in wasm and renders consistent',
+)
+assert(
+	Object.keys(r).sort().join(',') === 'findings,rules,valid,verdict',
+	'the segment audit answers in the stable wasm shape {valid, findings, rules, verdict}',
+)
+const r3Card = r.rules.find((c) => c.rule === 'R3')
+assert(
+	r3Card && r3Card.verdict === 'audit' && /PR-512/.test(r3Card.detail) && /14 matched flows/.test(r3Card.detail),
+	'the audit-mode R3 card cites the promotion PR and the matched-flow count in wasm',
+)
+
+r = segmentAudit({
+	renders: { ...segmentRenders, rules: segmentRenders.rules.filter((row) => !(row.fabric === 'cloud' && row.rule === 'R2')) },
+})
+assert(
+	hasFinding(r, 'render/rule-missing') && r.valid === false,
+	'a rule missing from one render is caught in wasm',
+)
+assert(
+	r.findings.some((f) => f.rule === 'render/rule-missing' && /segment-contract\.yaml/.test(f.message) && /segment-renders\.yaml/.test(f.message)),
+	'the missing-render finding cites BOTH file names in wasm',
+)
+
+r = segmentAudit({
+	renders: { ...segmentRenders, rules: [...segmentRenders.rules, { fabric: 'cloud', rule: 'R9', direction: 'egress', type: 'tcp', port: 443 }] },
+})
+assert(
+	hasFinding(r, 'render/rule-unknown') && r.valid === false,
+	'a render carrying a rule the contract never had is caught in wasm',
+)
+
+r = segmentAudit({
+	renders: { ...segmentRenders, rules: segmentRenders.rules.map((row) => row.rule === 'R1' && row.fabric === 'cloud' ? { ...row, direction: 'ingress' } : row) },
+})
+assert(
+	hasFinding(r, 'render/direction-mismatch') && r.valid === false,
+	'a direction disagreement inside the modeled subset is caught in wasm',
+)
+
+r = segmentAudit({
+	promotion: {
+		pr: segmentPromotion.pr,
+		rule: segmentPromotion.rule,
+		to: segmentPromotion.to,
+		window: segmentPromotion.window,
+	},
+})
+assert(
+	hasFinding(r, 'promotion/no-flow-evidence') && r.valid === false,
+	'a promotion without flow evidence fails in wasm',
+)
+
+r = segmentAudit({ flows: { ...segmentFlows, flows: segmentFlows.flows.filter((f) => !(f.from === 'api' && f.to === 'db')) } })
+assert(
+	r.valid === true && r.verdict === 'review' && hasFinding(r, 'flows/dead-rule'),
+	'a dead rule flags for review without failing the gate in wasm',
+)
+const deadCard = r.rules.find((c) => c.rule === 'R2')
+assert(deadCard && deadCard.verdict === 'dead', 'the dead R2 card renders dead in wasm')
+
+r = segmentAudit({
+	contract: {
+		...segmentContract,
+		rules: segmentContract.rules.map((rule) => rule.id === 'R4' ? { ...rule, exceptions: [{ reason: rule.exceptions[0].reason, expiresOn: '2026-09-01' }] } : rule),
+	},
+})
+assert(
+	hasFinding(r, 'exception/ttl-expired') && r.valid === false && r.verdict === 'inconsistent',
+	'a TTL-expired exception makes the composed verdict inconsistent in wasm',
+)
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
