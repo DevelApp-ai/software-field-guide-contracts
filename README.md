@@ -16,6 +16,8 @@ And it implements the **segment render-consistency and flow-evidence gate** from
 
 And it implements the **ingress hardening conformance validator** from [book issue #82](https://github.com/DevelApp-ai/software-field-guide/issues/82): the edge's posture as data — the DNS containment boundary, default-deny, the allowed domain patterns held inside the zone, certificate rotation clocks, SLOs with pagers behind them, audited route classes, and the kill path the platform swears it can pull — judged against a drill record. A wildcard is contained or it is too broad; an expired certificate is exposed; a kill path declared but never rehearsed fails the gate.
 
+And it implements the **citizen spec-rails conformance linter** from [book issue #84](https://github.com/DevelApp-ai/software-field-guide/issues/84): the citizen-built app as data — a manifest judged at the citizen's own PR gate against the app's spec (the rails it grants and the behaviors its coverage declares) and the platform guardrail registry (the rails a binding may ride and the floor each guardrail must meet). An escape hatch, an action outside the rails, a behavior without coverage, a guardrail below the floor: all advised, never blocked — the gate stays green with the advice on the record. A document the advisor cannot read is the one red it can show.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -46,10 +48,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `ingress/validate` | one ingress posture case alone | `{"case": {...}, "today": "YYYY-MM-DD"}` |
 | `ingress/gate` | a drill record against the posture case | `{"case": {...}, "drill": {...}, "today": "YYYY-MM-DD"}` |
 | `ingress/audit` | both at once — one verdict, the posture cards | the superset of the above |
+| `citizen/validate` | one citizen app manifest alone | `{"manifest": {...}, "today": "YYYY-MM-DD"}` |
+| `citizen/gate` | the app's spec and the platform guardrail registry against the manifest | `{"manifest": {...}, "spec": {...}, "registry": {...}, "today": "YYYY-MM-DD"}` |
+| `citizen/audit` | all of it at once — one verdict, the advice cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.8** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, and the ingress hardening conformance validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.9** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, and the citizen spec-rails conformance linter work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -597,6 +602,87 @@ make ingress-demo
 #      killpath/stale-rehearsal — the verdict is review, the gate stays green
 ```
 
+## The citizen spec-rails conformance linter
+
+The citizen-development chapter's YAML becomes three documents. The **citizen app manifest** is the app the citizen built, as data: the components it ships and the behavior each declares, the data bindings it opens and the rail each rides, the platform actions it uses, and the guardrails it builds against with their versions. The **app spec** is the agreement — the action rails the spec grants and the behaviors its coverage declares. The **platform guardrail registry** is the platform's word — the data rails a binding may ride and the platform floor each guardrail must meet. The linter joins all three at the citizen's PR gate and is honest about the role: an advisor, not a blocker — every drift it finds is an advisory, the gate stays green, the advice lands on the record. The one red it can show is a document it cannot read.
+
+```yaml
+# manifest.yaml — the citizen-built app as data
+version: 1
+reviewedOn: 2026-10-01
+owner: Storefront team
+app: expense-approver
+
+components:            # every behavior declared here needs spec coverage
+  - name: claim-form
+    behavior: submits an expense claim
+  - name: claim-rules
+    behavior: approves a claim inside its policy
+
+dataBindings:          # every binding rides a rail the registry declares
+  - name: claims-store
+    mode: read
+    via: platform-data-api
+  - name: audit-log
+    mode: write
+    via: platform-data-api
+
+actions: [expense.submit, expense.approve]   # all rails the spec grants
+
+guardrails:            # the registry's floor is the word on whether they are current
+  - { name: data-guardrail, version: 3 }
+  - { name: action-guardrail, version: 2 }
+```
+
+```yaml
+# spec.yaml — the rails the spec grants and the coverage it declares
+version: 1
+reviewedOn: 2026-10-01
+owner: Storefront team
+actions: [expense.submit, expense.approve]
+coverage:
+  - submits an expense claim
+  - approves a claim inside its policy
+```
+
+```yaml
+# guardrails.yaml — the platform's word, not the citizen's
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+dataRails: [platform-data-api]
+platformFloor:
+  - { name: data-guardrail, floor: 3 }
+  - { name: action-guardrail, floor: 2 }
+```
+
+### What the linter enforces and proofs
+
+- **Loud validation of the manifest** (`citizen/validate`): missing fields, unversioned documents, stale review stamps, an app without its owner — and the shapes: components with names and behaviors, bindings with modes the platform knows (`read` or `write`) and a rail to ride, actions as strings without duplicates, guardrails with versions.
+- **The four advisories** (`citizen/gate`, severity `advisory` — the gate stays green, `valid: true`, verdict `advises changes`): a binding that goes around the registry's rails is an escape hatch the platform cannot see (`binding/escape-hatch`, citing the manifest and the registry), an action the spec never granted is a rail the app runs on anyway (`action/outside-rails`), a behavior the coverage never declared is behavior nobody agreed to (`behavior/uncovered-by-spec`), and a guardrail built below the registry's floor is guardrail drift after a platform upgrade (`guardrail/below-floor`) — a guardrail the registry never heard of advises the same (`guardrail/unknown`).
+- **The unreadable tier** (severity `error` — verdict `unreadable`): a document the advisor cannot read. Malformed manifests, specs, and registries fail honestly; drift never does.
+- **One audit** (`citizen/audit`): the composed entrypoint for CI and the playground — one verdict (`aligned`, `advises changes`, or `unreadable`) and the advice cards alongside: one card per judged item across the four areas (data bindings, actions, spec coverage, guardrails), each aligned or advises, with the record that resolved it.
+
+The done-when proof from book issue #84 runs as a single target:
+
+```sh
+make citizen-demo
+# → 1. the app manifest validates
+#   2. the control passes the gate and renders aligned
+#      control verdict: aligned — the whole board says so, one card per judged item
+#   3. an escape hatch is caught advising:
+#      binding/escape-hatch — the gate stays green, the advice is on the record
+#   4. an action outside the spec's rails is caught advising:
+#      action/outside-rails — the gate stays green, the advice is on the record
+#   5. a behavior without spec coverage is caught advising:
+#      behavior/uncovered-by-spec — the gate stays green, the advice is on the record
+#   6. a guardrail below the platform floor is caught advising:
+#      guardrail/below-floor — the gate stays green, the advice is on the record
+#   7. a manifest the advisor cannot read fails honestly:
+#      caught as expected: manifest/version-required — the advisor refuses
+#      to answer on a document it cannot read
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -619,6 +705,8 @@ make check-segment TODAY=2026-10-20         # the segment contract alone
 make segment-gate  TODAY=2026-10-20         # renders + flows + promotion against the contract
 make check-ingress TODAY=2026-10-20         # the ingress posture case alone
 make ingress-gate  TODAY=2026-10-20         # the drill record against the posture case
+make check-citizen TODAY=2026-10-20         # the citizen app manifest alone
+make citizen-gate  TODAY=2026-10-20         # the spec + the guardrail registry against the manifest
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -629,7 +717,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -647,19 +735,21 @@ policies/actions/   lib, model, policy, gate, audit
 policies/erasure/   lib, model, policy, gate, audit
 policies/segment/   lib, model, policy, gate, audit
 policies/ingress/   lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress)
+policies/citizen/  lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
                     instrumented sources), the alerting demo (contract + incident
                     register), the erasure demo (DEK registry + cases), and the segment
                     demo (contract + renders + flows + promotion, plus broken variants),
-                    and the ingress demo (posture case + drill record, plus broken variants)
+                    and the ingress demo (posture case + drill record, plus broken variants),
+                    and the citizen demo (app manifest + spec + guardrail registry, plus broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -669,12 +759,13 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the ten `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the eleven `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
 - **Nothing is forgotten without a record.** The #69 rule, moved from alerting to erasure: a store in the inventory needs a sweep record, an aged-out backup window, or an explicit pending reason — and an unexpired backup is an honest pending state, not a failure. The case stays open until the window closes; the registry's destroyed keys carry their evidence records, because a destruction asserted is not a destruction evidenced.
 - **A rule is not enforced until every fabric says so.** The segment gate verifies every join both ways — a rule missing from one render drifts silently, and a render carrying a rule the contract never had drifts just as silently — and cites both files when it bites, because a mismatch without its documents is a mystery, not a finding. Promotion is evidence, not assertion: an audit rule moves to enforce only by a PR citing flow evidence the gate holds, with matched flows inside a window the evidence actually covered. The gate models a stated subset — direction, type, port, mode — and says so, rather than pretending to full eBPF or CIL semantics. And a rule nothing exercised is flagged for review, not failed: a dead rule is a question, not an incident.
+- **The linter is an advisor, not a blocker.** Citizen development is judged at the citizen's own PR gate, against the citizen's own spec: escape hatches the platform cannot see, actions outside the rails the spec grants, behaviors without coverage, guardrails below the registry's floor — all advisories, because the point is to surface drift before it ships, not to gate the citizen on the platform's behalf. The red is reserved for the unreadable: a document the advisor cannot parse fails honestly, while drift never fails the build. The spec is the agreement and the app drifts; the floor is the registry's word, not the citizen's. Keeping manifest, spec, and registry as three documents means the same registry can back many apps and every app is re-judged when the platform upgrades. The composed audit dedupes the shared conditions, so the same broken manifest reports once, whichever lens caught it.
 - **Posture is data, and a kill path is rehearsed or it is a hope.** The ingress case records the edge's posture as checkable facts — the zone that contains every wildcard, the default-deny that keeps the allow list an allow list, the rotation clocks on the certificates, the pagers behind the SLOs, the audit coverage of the route classes — and the gate joins the drill record to it, because a kill path declared but never rehearsed is a lever nobody has proven they can pull. Rehearsal staleness is a warning, not an error: a kill path rehearsed once and never again is a question, not an incident. The composed audit dedupes the shared conditions, so the same broken case reports once, whichever lens caught it.
 
 ## License
