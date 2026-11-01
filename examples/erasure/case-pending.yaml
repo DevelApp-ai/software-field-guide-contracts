@@ -1,0 +1,34 @@
+# Erasure case — the unexpired backup — The Software Field Guide, issue #79.
+#
+# The globex erasure, four days after acme's: primaries and derived
+# indexes swept, the DEK destroyed — but the nightly backup window is
+# still open (the last backup that can restore the tenant ages out on
+# 2027-01-15). An unexpired backup is an honest pending state, not a
+# failure: the case stays open until the window closes, and the gate
+# renders the verdict — pending, honest. Flip the status to closed
+# and the gate catches the claim (see broken/case.closed-early.yaml);
+# a case that says forgotten while a backup can still produce the
+# data is a deletion claim the evidence does not support.
+#
+# Example dates are chosen relative to the CI anchor date 2026-10-20.
+
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-globex
+requestedOn: 2026-10-05
+requestedBy: DSR-2026-052 (tenant offboarding erasure request)
+status: open
+
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2027-01-15}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-06
+    sweptBy: DELETE cascade from the tenant row; 208 rows removed, count verified by the tenant-id scan
+  - store: corpus-vector-index
+    sweptOn: 2026-10-06
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified

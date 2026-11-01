@@ -1,0 +1,26 @@
+# The replica without a sweep record: the postgres-replica-eu row is
+# in the inventory, and no sweep record covers it — the replica was
+# probably fine, but probably is not evidence. The exact gap the #79
+# gate exists to catch: nothing is forgotten without a record, and
+# the finding names the store. (The control case minus one sweep.)
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-acme
+requestedOn: 2026-10-01
+requestedBy: DSR-2026-041 (tenant offboarding erasure request)
+status: closed
+
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: postgres-replica-eu, kind: replica}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup, expiresOn: 2026-10-15}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-02
+    sweptBy: DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan
+  - store: corpus-vector-index
+    sweptOn: 2026-10-04
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified

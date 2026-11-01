@@ -1,0 +1,32 @@
+# The backup without its expiry window: the nightly-backups row is
+# swept, but it declares no expiresOn — and a backup without its
+# expiry window never becomes provably gone. The window is what says
+# the NEXT backup ages out too; swept-but-undeclared is a store that
+# quietly keeps making copies after the case closed.
+owner: Platform team
+reviewedOn: 2026-10-19
+
+tenant: tenant-acme
+requestedOn: 2026-10-01
+requestedBy: DSR-2026-041 (tenant offboarding erasure request)
+status: closed
+
+stores:
+  - {name: postgres-primary, kind: primary}
+  - {name: postgres-replica-eu, kind: replica}
+  - {name: corpus-vector-index, kind: vector-store}
+  - {name: nightly-backups, kind: backup}
+
+sweeps:
+  - store: postgres-primary
+    sweptOn: 2026-10-02
+    sweptBy: DELETE cascade from the tenant row; 412 rows removed, count verified by the tenant-id scan
+  - store: postgres-replica-eu
+    sweptOn: 2026-10-03
+    sweptBy: replica catch-up confirmed; the tenant-id scan returns zero rows on the replica
+  - store: corpus-vector-index
+    sweptOn: 2026-10-04
+    sweptBy: index rebuild without the tenant's corpus; embedding count verified
+  - store: nightly-backups
+    sweptOn: 2026-10-16
+    sweptBy: backup restore-point deletion confirmed; no restore point can return the tenant

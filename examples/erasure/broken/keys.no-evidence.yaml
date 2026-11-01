@@ -1,0 +1,14 @@
+# The destruction without its evidence: tenant-acme's key is marked
+# destroyed, but the row names no destroyedBy — no change, no
+# runbook, no hand that did it. A destruction without its evidence
+# record is a deletion asserted, not evidenced; the registry is the
+# primitive the whole gate leans on, and an unproven row in the
+# primitive poisons every case that cites it.
+version: 1
+reviewedOn: 2026-10-01
+
+keys:
+  - dek: tenant-acme-dek-004
+    tenant: tenant-acme
+    state: destroyed
+    destroyedAt: 2026-10-02
