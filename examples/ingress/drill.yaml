@@ -1,0 +1,24 @@
+# Drill record — The Software Field Guide, issue #82.
+#
+# The rehearsal evidence for the case's kill path: each row names
+# the kill path it rehearsed, the date it was drilled, and the
+# evidence that says so. The gate joins this record against the
+# posture case — a kill path declared but never rehearsed fails,
+# and a rehearsal older than the staleness clock flags for review.
+# The clock is declared here, next to the evidence it judges:
+# maxStalenessDays, 180 by default.
+#
+# The record is seeded, after the chapter's worked example: one
+# rehearsal of the seal-edge kill path, drilled ten days before
+# the CI anchor date 2026-10-20, with its drill log cited.
+
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+
+maxStalenessDays: 180
+
+drills:
+  - killPath: seal-edge
+    drilledOn: 2026-10-10
+    evidence: "drill log 2026-10-10: seal-edge pulled, all ingress denied for 90 seconds, recovery clean"

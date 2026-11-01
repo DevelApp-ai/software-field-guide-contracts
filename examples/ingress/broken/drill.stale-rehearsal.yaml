@@ -1,0 +1,22 @@
+# BROKEN VARIANT — the stale rehearsal — The Software Field
+# Guide, issue #82.
+#
+# The control drill record with its rehearsal dated eight months
+# before the anchor date: 2026-02-10 is 252 days before 2026-10-20,
+# beyond the record's own 180-day staleness clock. The rehearsal
+# happened — the gate does not fail — but a kill path rehearsed
+# once and never again is a kill path that has drifted, and the
+# gate must flag it exactly once, honestly, as a warning.
+
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+
+maxStalenessDays: 180
+
+drills:
+  # Rehearsed, but long ago: 252 days before the anchor date,
+  # against a 180-day clock.
+  - killPath: seal-edge
+    drilledOn: 2026-02-10
+    evidence: "drill log 2026-02-10: seal-edge pulled, all ingress denied for 90 seconds, recovery clean"

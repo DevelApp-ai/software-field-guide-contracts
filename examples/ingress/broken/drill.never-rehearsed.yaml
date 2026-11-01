@@ -1,0 +1,19 @@
+# BROKEN VARIANT — the kill path never rehearsed — The Software
+# Field Guide, issue #82.
+#
+# The control drill record with its rehearsal row removed: the
+# drills array is empty, the record itself is well-formed, and the
+# posture case still declares seal-edge. A kill path declared but
+# never rehearsed is a promise the platform has never kept, and the
+# gate must flag it exactly once, citing the drill record that
+# holds no rehearsal of it.
+
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+
+maxStalenessDays: 180
+
+# No rehearsals on record: seal-edge is declared in the case, but
+# nobody has ever pulled it on the record.
+drills: []

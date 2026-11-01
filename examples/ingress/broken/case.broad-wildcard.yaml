@@ -1,0 +1,55 @@
+# BROKEN VARIANT — the too-broad wildcard — The Software Field
+# Guide, issue #82.
+#
+# The control case with its wildcard granted outside the platform
+# zone: the developer branch becomes *.example.com — a two-label
+# suffix, deep enough on its own, but reaching past dev.internal
+# into a namespace the case never contained. A wildcard the zone
+# cannot hold is an admit-all in disguise, and the validator must
+# flag it exactly once at case time.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+zone: dev.internal
+
+requestPolicy:
+  defaultDeny: true
+  decision: deny every request the allowed domains do not admit
+
+domains:
+  # The wildcard that escaped: outside the zone the case declares.
+  - pattern: "*.example.com"
+    intent: every developer app tenant, inside the platform zone
+  - pattern: "partner.example.com"
+    intent: the one external partner host the storefront fronts
+
+certs:
+  - serves: edge.dev.internal
+    notBefore: 2026-08-01
+    notAfter: 2027-01-15
+    rotateByDays: 30
+  - serves: partner.example.com
+    notBefore: 2026-07-01
+    notAfter: 2026-12-15
+    rotateByDays: 21
+
+slos:
+  - name: edge availability
+    target: 99.9% of requests served inside 200ms
+    pager: platform on-call
+
+routes:
+  - class: developer-app
+  - class: partner-api
+  - class: health-check
+
+loggedRouteClasses:
+  - developer-app
+  - partner-api
+  - health-check
+
+killPath:
+  name: seal-edge
+  effect: the edge denies all ingress and the platform seals inside its zone
