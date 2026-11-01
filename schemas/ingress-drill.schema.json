@@ -1,0 +1,57 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/ingress-drill.schema.json",
+	"title": "Drill record",
+	"description": "The drill record, as defined in The Software Field Guide, issue #82: the rehearsal evidence for the ingress posture case's kill path. Each row names the kill path it rehearsed (the case must declare it — the two documents describe one platform), the day it was drilled (a real date, on or before the injected clock — a rehearsal recorded in the future is a rehearsal that has not happened), and the evidence that says so. The staleness clock is declared here, next to the evidence it judges: maxStalenessDays, 180 by default. The gate joins this record against the posture case — a kill path declared but never rehearsed fails, and a rehearsal older than the clock flags for review.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "drills"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the drill record. Rehearsals are versioned like the case they rehearse."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the record was last reviewed, YYYY-MM-DD. The validator flags dates in the future — evidence cannot arrive before the work it evidences."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the rehearsals. A drill record with an owner and a review cadence is the discipline."
+		},
+		"maxStalenessDays": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "The rehearsal staleness clock in days, default 180. A rehearsal older than the clock flags for review — a kill path rehearsed once and never again is a kill path that has drifted."
+		},
+		"drills": {
+			"type": "array",
+			"description": "The rehearsals on record. Empty is well-formed — and a declared kill path with an empty record is exactly the never-rehearsed finding.",
+			"items": {
+				"type": "object",
+				"required": ["killPath", "drilledOn", "evidence"],
+				"additionalProperties": true,
+				"properties": {
+					"killPath": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The kill path this row rehearses. Must be declared in the posture case — a rehearsal of a kill path the case never declares is a rehearsal of a promise the platform never made."
+					},
+					"drilledOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the rehearsal ran, YYYY-MM-DD. Must not postdate the injected clock — a drill recorded in the future is a drill that has not happened, and it never softens the kill path's posture."
+					},
+					"evidence": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The cited evidence — the drill log, the runbook entry, the recording. A rehearsal without a record is a rumor."
+					}
+				}
+			}
+		}
+	}
+}
