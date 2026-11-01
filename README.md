@@ -12,6 +12,8 @@ And it implements the **action scope validator** from [book issue #70](https://g
 
 And it implements the **deletion evidence validator** from [book issue #79](https://github.com/DevelApp-ai/software-field-guide/issues/79): a per-tenant right-to-be-forgotten case is judged against the DEK registry and its own sweep records — every store in the inventory swept, aged out by a declared backup window, or honestly pending; the tenant's keys destroyed with their evidence records; nothing is forgotten without a record.
 
+And it implements the **segment render-consistency and flow-evidence gate** from [book issue #80](https://github.com/DevelApp-ai/software-field-guide/issues/80): one segment contract, rendered to N fabrics — and a gate that proves every fabric rendered every rule, no fabric rendered a rule the contract never had, and no audit rule was promoted to enforce without the flow evidence its PR cites. A rule is not enforced until every fabric says so; promotion is evidence, not assertion.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -36,10 +38,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `erasure/validate` | one DEK registry | `{"keys": {...}, "today": "YYYY-MM-DD"}` |
 | `erasure/gate` | an erasure case against the DEK registry | `{"keys": {...}, "case": {...}, "today": "YYYY-MM-DD"}` |
 | `erasure/audit` | both at once — one verdict, the per-store evidence | the superset of the above |
+| `segment/validate` | one segment contract alone | `{"contract": {...}, "today": "YYYY-MM-DD"}` |
+| `segment/gate` | fabric renders, flow evidence, and a promotion PR against the contract | `{"contract": {...}, "renders": {...}, "flows": {...}, "promotion": {...}, "today": "YYYY-MM-DD"}` |
+| `segment/audit` | all of it at once — one verdict, the per-rule cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v0.6** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, and the deletion evidence validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v0.7** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, and the segment render-consistency gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -421,6 +426,88 @@ make erasure-demo
 #      key/destroyed-by-required
 ```
 
+## The segment render-consistency and flow-evidence gate
+
+One contract, N fabrics, promotion by evidence. The chapter's microsegmentation YAML becomes a **segment contract** — the segments of the estate and the named rules between them, each with its direction, type, and port inside the modeled subset (`ingress`/`egress`, `tcp`/`udp` — the gate is honest about what it models, not pretending to full eBPF or CIL semantics), its mode (`audit` or `enforce`), and TTL-bound exceptions that carry their reason and the date they expire. Every fabric renders the same contract, and the gate verifies every join both ways:
+
+```yaml
+# contract.yaml — the segments and the rules between them
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+segments: [web, api, db, worker, external]
+rules:
+  - {id: R1, from: web, to: api, type: tcp, port: 443, direction: egress, mode: enforce}
+  - {id: R3, from: worker, to: api, type: tcp, port: 443, direction: egress, mode: audit}
+  - id: R4
+    from: external
+    to: web
+    type: tcp
+    port: 443
+    direction: ingress
+    mode: enforce
+    exceptions:
+      - reason: pen-test window — the load generator's traffic is expected until the contract is re-rendered
+        expiresOn: 2026-12-01
+
+# renders.yaml — one row per contract rule per fabric, citing the rule id
+version: 1
+reviewedOn: 2026-10-18
+fabrics: [cloud, host-firewall]
+rules:
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+  # … R2, R3, R4 on both fabrics
+
+# flows.yaml — the observed flows of the window, aggregated per tuple
+reviewedOn: 2026-10-16
+window: {from: 2026-10-01, to: 2026-10-15}
+flows:
+  - {from: worker, to: api, type: tcp, port: 443, count: 14}
+
+# promotion.yaml — the PR moving an audit rule to enforce, citing its evidence
+pr: PR-512
+rule: R3
+to: enforce
+evidenceFile: flows.yaml
+window: {from: 2026-10-01, to: 2026-10-15}
+```
+
+See [examples/segment/](examples/segment/) for the complete control and the eight broken variants, and [schemas/](schemas/) for the four JSON Schema drafts. The estate, the renders, and the flows are seeded after the chapter's example estate — labeled as seeded, because pretending to a real estate's policy history would be dishonest.
+
+### What the gate enforces and proofs
+
+- **Loud validation of the contract** (`segment/validate`): missing fields, unversioned documents, stale review stamps, duplicate rule ids, rules between undeclared segments (`rule/segment-undeclared`), unknown directions, types, ports, and modes — and the exception rules: an exception without a reason or an expiry is not an exception, it is the rule; an expired exception is caught by the injected clock (`exception/ttl-expired`).
+- **The render-consistency gate** (`segment/gate`): every contract rule appears once per declared fabric (`render/rule-missing`, citing both the contract file and the renders file), no render carries a rule the contract never had (`render/rule-unknown`), the modeled subset agrees (`render/direction-mismatch`, `render/type-mismatch`, `render/port-mismatch`), no fabric renders the same rule twice, and every fabric in a render row is declared.
+- **Promotion by evidence**: a PR moving an audit rule to enforce must cite a flow-evidence file the gate holds (`promotion/no-flow-evidence`), the evidence must show matched flows for the rule inside the window (`promotion/no-matched-flows`), and the claimed window must fall inside the evidence's window (`promotion/window-outside-evidence`). A PR may only claim flows its evidence actually observed — promotion is evidence, not assertion.
+- **The dead-rule review** (`flows/dead-rule`): a rule that matched zero flows across the window is flagged for review, not failed — a warning, and the verdict says `review`. A rule nobody exercised is a question, not an incident.
+- **One audit** (`segment/audit`): the composed entrypoint for CI and the playground — contract validated, renders and evidence gated, one verdict (`consistent`, `review`, or `inconsistent`), and the per-rule cards alongside: each rule consistent, audit, mismatched, missing, or dead, with the record that resolved it.
+
+The done-when proof from book issue #80 — a render-mismatch caught citing both files — runs as a single target:
+
+```sh
+make segment-demo
+# → 1. the segment contract validates
+#   2. the control passes the gate and renders consistent
+#   3. a rule missing from one render is caught citing BOTH files:
+#      render/rule-missing — examples/segment/contract.yaml and
+#      renders.missing-in-render.yaml
+#   4. a render carrying a rule the contract never had is caught:
+#      render/rule-unknown naming R9
+#   5. a direction disagreement inside the modeled subset is caught:
+#      render/direction-mismatch
+#   6. a type disagreement inside the modeled subset is caught:
+#      render/type-mismatch
+#   7. a promotion without flow evidence fails:
+#      promotion/no-flow-evidence naming R3
+#   8. a promotion claiming a window its evidence never covered is caught:
+#      promotion/window-outside-evidence
+#   9. a rule nothing exercised is flagged for review, not failed:
+#      flows/dead-rule naming R2 — the verdict is review
+#  10. a TTL-expired exception is caught at contract time:
+#      exception/ttl-expired
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -439,6 +526,8 @@ make check-actions TODAY=2026-10-20         # the action registry alone
 make actions-gate  TODAY=2026-10-20         # the demo manifest against the registry
 make check-erasure TODAY=2026-10-20         # the DEK registry alone
 make erasure-gate  TODAY=2026-10-20         # the demo erasure case against the registry
+make check-segment TODAY=2026-10-20         # the segment contract alone
+make segment-gate  TODAY=2026-10-20         # renders + flows + promotion against the contract
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -449,7 +538,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -465,17 +554,19 @@ policies/obs/       lib, model, policy, lint, gate, audit
 policies/alerts/    lib, model, policy, gate, audit
 policies/actions/   lib, model, policy, gate, audit
 policies/erasure/   lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure)
+policies/segment/   lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
                     instrumented sources), the alerting demo (contract + incident
-                    register), and the erasure demo (DEK registry + cases)
+                    register), the erasure demo (DEK registry + cases), and the segment
+                    demo (contract + renders + flows + promotion, plus broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -485,11 +576,12 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the eight `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the nine `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
 - **Nothing is forgotten without a record.** The #69 rule, moved from alerting to erasure: a store in the inventory needs a sweep record, an aged-out backup window, or an explicit pending reason — and an unexpired backup is an honest pending state, not a failure. The case stays open until the window closes; the registry's destroyed keys carry their evidence records, because a destruction asserted is not a destruction evidenced.
+- **A rule is not enforced until every fabric says so.** The segment gate verifies every join both ways — a rule missing from one render drifts silently, and a render carrying a rule the contract never had drifts just as silently — and cites both files when it bites, because a mismatch without its documents is a mystery, not a finding. Promotion is evidence, not assertion: an audit rule moves to enforce only by a PR citing flow evidence the gate holds, with matched flows inside a window the evidence actually covered. The gate models a stated subset — direction, type, port, mode — and says so, rather than pretending to full eBPF or CIL semantics. And a rule nothing exercised is flagged for review, not failed: a dead rule is a question, not an incident.
 
 ## License
 

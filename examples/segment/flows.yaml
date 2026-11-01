@@ -1,0 +1,31 @@
+# Flow evidence — The Software Field Guide, issue #80.
+#
+# The observed flows of the audit window: what actually crossed the
+# estate between the window's dates, aggregated per from/to/type/
+# port tuple. This file is what a promotion PR cites — promotion is
+# evidence, not assertion — and what the dead-rule review reads: a
+# rule that matched zero flows across the window is a rule nobody
+# exercised, and it gets the review flag rather than silence. The
+# flows are seeded, after the chapter's example estate, not a capture
+# of real traffic. Example dates are chosen relative to the CI
+# anchor date 2026-10-20.
+
+reviewedOn: 2026-10-16
+
+window:
+  from: 2026-10-01
+  to: 2026-10-15
+
+flows:
+  # R1 traffic: the storefront's web tier calling the api tier.
+  - {from: web, to: api, type: tcp, port: 443, count: 812}
+
+  # R2 traffic: the api tier reaching the primary database.
+  - {from: api, to: db, type: tcp, port: 5432, count: 147}
+
+  # R3 traffic: the batch worker calling the api tier — the evidence
+  # the promotion PR cites.
+  - {from: worker, to: api, type: tcp, port: 443, count: 14}
+
+  # R4 traffic: the internet entering the web tier.
+  - {from: external, to: web, type: tcp, port: 443, count: 2105}

@@ -1,0 +1,16 @@
+# BROKEN VARIANT — promotion window outside the evidence — The
+# Software Field Guide, issue #80.
+#
+# The control promotion with its window stretched past the evidence:
+# the PR cites flows.yaml (which covers 2026-10-01..2026-10-15) but
+# claims the window 2026-10-16..2026-10-31 — traffic the cited
+# evidence never observed. A PR may only claim flows its evidence
+# actually covers. The gate must catch it exactly once.
+
+pr: PR-512
+rule: R3
+to: enforce
+evidenceFile: flows.yaml
+window:
+  from: 2026-10-16
+  to: 2026-10-31

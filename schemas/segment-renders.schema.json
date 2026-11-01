@@ -1,0 +1,68 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/segment-renders.schema.json",
+	"title": "Rendered policies",
+	"description": "The rendered policies, as defined in The Software Field Guide, issue #80: one segment contract rendered to N fabrics. The fabrics array declares the N — every well-formed contract rule must appear once per fabric — and each render row cites the contract rule it renders with the direction, type, and port it rendered, inside the modeled subset. The gate verifies the joins both ways: a rule missing from one render drifts silently (render/rule-missing), and a render carrying a rule the contract never had drifts just as silently (render/rule-unknown). This schema mirrors the shape rules of the Rego validator (policies/segment); the validator additionally enforces the semantic rules a JSON schema cannot — fabrics declared and unique, render rows well-formed, every contract rule rendered on every declared fabric exactly once, and the direction, type, and port agreeing with the contract.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "fabrics", "rules"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the renders. The renders are versioned like the contract they render — rendered policies that nobody re-reads are rendered policies nobody still believes."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the renders were last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"fabrics": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The fabrics the renders cover — the N in one contract, N fabrics. A rule is not enforced until every fabric says so; a fabric declared twice is a render the gate cannot count.",
+			"items": {
+				"type": "string",
+				"minLength": 1
+			}
+		},
+		"rules": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The render rows: one per contract rule per fabric. The gate flags a row citing a fabric the document never declared (render/fabric-undeclared), a rule the contract never declared (render/rule-unknown), the same rule rendered twice on one fabric (render/rule-duplicate), and direction, type, or port disagreements with the contract (render/direction-mismatch, render/type-mismatch, render/port-mismatch).",
+			"items": {
+				"type": "object",
+				"required": ["fabric", "rule", "direction", "type", "port"],
+				"additionalProperties": true,
+				"properties": {
+					"fabric": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The fabric this row renders onto, e.g. cloud or host-firewall. Must be declared in fabrics."
+					},
+					"rule": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The contract rule this row renders, by id. A render carrying a rule the contract never had drifts silently — the gate cites both documents."
+					},
+					"direction": {
+						"type": "string",
+						"enum": ["ingress", "egress"],
+						"description": "The direction as rendered. Must agree with the contract within the modeled subset."
+					},
+					"type": {
+						"type": "string",
+						"enum": ["tcp", "udp"],
+						"description": "The protocol as rendered. Must agree with the contract within the modeled subset."
+					},
+					"port": {
+						"type": "integer",
+						"minimum": 1,
+						"maximum": 65535,
+						"description": "The port as rendered. Must agree with the contract."
+					}
+				}
+			}
+		}
+	}
+}

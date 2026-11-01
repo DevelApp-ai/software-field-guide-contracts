@@ -1,0 +1,38 @@
+# Rendered policies — The Software Field Guide, issue #80.
+#
+# One segment contract (contract.yaml) rendered to N fabrics: the
+# fabrics list declares the N — every well-formed contract rule must
+# appear once per fabric — and each render row cites the contract
+# rule it renders (by id) with the direction, type, and port it
+# rendered, inside the modeled subset. The gate verifies the joins
+# both ways: a rule missing from one render drifts silently, and a
+# render carrying a rule the contract never had drifts just as
+# silently. The rows here are seeded renders of the chapter's example
+# estate, not captures of a real estate's policy languages. Example
+# dates are chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-18
+
+fabrics:
+  - cloud
+  - host-firewall
+
+rules:
+  # R1 — web → api, tcp/443, egress — on both fabrics.
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+
+  # R2 — api → db, tcp/5432, egress — on both fabrics.
+  - {fabric: cloud, rule: R2, direction: egress, type: tcp, port: 5432}
+  - {fabric: host-firewall, rule: R2, direction: egress, type: tcp, port: 5432}
+
+  # R3 — worker → api, tcp/443, egress — on both fabrics, audit mode
+  # rendered like any other rule: an audit rule is rendered, only its
+  # enforcement is deferred.
+  - {fabric: cloud, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R3, direction: egress, type: tcp, port: 443}
+
+  # R4 — external → web, tcp/443, ingress — on both fabrics.
+  - {fabric: cloud, rule: R4, direction: ingress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R4, direction: ingress, type: tcp, port: 443}

@@ -1,0 +1,55 @@
+# BROKEN VARIANT — the TTL-expired exception — The Software Field
+# Guide, issue #80.
+#
+# The control contract with its exception's expiry moved to the
+# past: the pen-test window on R4 expired on 2026-09-01, before the
+# anchor date, yet the contract still carries it. An expired
+# exception rendered is a promise the clock already broke — the
+# exception is dead weight, and the validator must flag it exactly
+# once at contract time.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+segments:
+  - web
+  - api
+  - db
+  - worker
+  - external
+
+rules:
+  - id: R1
+    from: web
+    to: api
+    type: tcp
+    port: 443
+    direction: egress
+    mode: enforce
+  - id: R2
+    from: api
+    to: db
+    type: tcp
+    port: 5432
+    direction: egress
+    mode: enforce
+  - id: R3
+    from: worker
+    to: api
+    type: tcp
+    port: 443
+    direction: egress
+    mode: audit
+  - id: R4
+    from: external
+    to: web
+    type: tcp
+    port: 443
+    direction: ingress
+    mode: enforce
+    exceptions:
+      # The pen-test window EXPIRED on 2026-09-01 — before the
+      # anchor date 2026-10-20. The seeded expired TTL.
+      - reason: pen-test window — the load generator's traffic is expected until the contract is re-rendered
+        expiresOn: 2026-09-01

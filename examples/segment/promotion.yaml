@@ -1,0 +1,18 @@
+# Promotion request — The Software Field Guide, issue #80.
+#
+# The PR that moves one audit rule to enforce, citing its evidence:
+# audit→enforce promotion is a PR citing a flow-evidence file (the
+# observed flows of the window it claims), never a human assertion.
+# The gate reads the cited evidence, demands it in hand, demands
+# matched flows for the rule inside the window, and demands the
+# claimed window fall inside the evidence's window — a PR may only
+# claim flows its evidence actually observed. Example dates are
+# chosen relative to the CI anchor date 2026-10-20.
+
+pr: PR-512
+rule: R3
+to: enforce
+evidenceFile: flows.yaml
+window:
+  from: 2026-10-01
+  to: 2026-10-15

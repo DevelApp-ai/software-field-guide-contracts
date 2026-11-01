@@ -1,0 +1,27 @@
+# BROKEN VARIANT — type mismatch — The Software Field Guide, issue #80.
+#
+# The control renders with ONE field changed: the cloud fabric
+# renders R2 (api → db) as udp, while the contract says tcp. Within
+# the modeled subset the two documents are no longer rendering the
+# same protocol — the gate names the field, the fabric, and both
+# documents. The seeded mismatch must be caught exactly once.
+
+version: 1
+reviewedOn: 2026-10-18
+
+fabrics:
+  - cloud
+  - host-firewall
+
+rules:
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+
+  # R2 rendered UDP on cloud — the contract says tcp.
+  - {fabric: cloud, rule: R2, direction: egress, type: udp, port: 5432}
+  - {fabric: host-firewall, rule: R2, direction: egress, type: tcp, port: 5432}
+
+  - {fabric: cloud, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R4, direction: ingress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R4, direction: ingress, type: tcp, port: 443}
