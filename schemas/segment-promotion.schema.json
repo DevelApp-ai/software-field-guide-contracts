@@ -1,0 +1,49 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/segment-promotion.schema.json",
+	"title": "Promotion request",
+	"description": "The promotion request, as defined in The Software Field Guide, issue #80: the PR that moves one audit rule to enforce, citing its flow-evidence file — promotion is evidence, not assertion. The gate demands the evidence in hand, matched flows for the rule, and a claimed window inside the evidence's window: a PR may only claim flows its evidence actually observed. The validator additionally enforces the semantic rules a JSON schema cannot — the named rule declared and in audit mode, the target enforce, the window real and inside the evidence window, and the cited evidence showing matched flows.",
+	"type": "object",
+	"required": ["pr", "rule", "to", "evidenceFile", "window"],
+	"additionalProperties": true,
+	"properties": {
+		"pr": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The PR that carries the promotion. Audit→enforce promotion is a PR citing evidence, not a suggestion."
+		},
+		"rule": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The contract rule to promote, by id. Must be declared and in audit mode — promoting a rule that is already enforced is a PR about nothing."
+		},
+		"to": {
+			"type": "string",
+			"enum": ["enforce"],
+			"description": "The target mode. Audit→enforce is the only promotion this gate models, and it says so."
+		},
+		"evidenceFile": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The flow-evidence file the PR cites. Without its citation the promotion fails — promotion is evidence, not assertion."
+		},
+		"window": {
+			"type": "object",
+			"required": ["from", "to"],
+			"additionalProperties": false,
+			"description": "The window the PR claims. Must fall inside the window of the cited evidence — the PR may only claim flows its evidence actually observed.",
+			"properties": {
+				"from": {
+					"type": "string",
+					"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+					"description": "The day the claimed window opened, YYYY-MM-DD."
+				},
+				"to": {
+					"type": "string",
+					"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+					"description": "The day the claimed window closed, YYYY-MM-DD."
+				}
+			}
+		}
+	}
+}

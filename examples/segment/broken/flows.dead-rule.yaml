@@ -1,0 +1,23 @@
+# BROKEN VARIANT — the dead rule — The Software Field Guide, issue #80.
+#
+# The control flow evidence with R2's traffic removed: the api tier's
+# database flows are gone from the window, so the enforce rule R2
+# (api → db, tcp/5432) matches zero flows across 2026-10-01..
+# 2026-10-15. Nothing fails — the estate is consistent — but the
+# rule is dead weight nobody exercised, and dead rules accumulate
+# forever without a review flag. The gate must flag R2 exactly once,
+# as the review verdict.
+
+reviewedOn: 2026-10-16
+
+window:
+  from: 2026-10-01
+  to: 2026-10-15
+
+flows:
+  - {from: web, to: api, type: tcp, port: 443, count: 812}
+
+  # R2's flows are GONE — the seeded dead rule.
+
+  - {from: worker, to: api, type: tcp, port: 443, count: 14}
+  - {from: external, to: web, type: tcp, port: 443, count: 2105}

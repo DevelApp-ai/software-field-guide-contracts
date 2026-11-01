@@ -1,0 +1,15 @@
+# BROKEN VARIANT — promotion without flow evidence — The Software
+# Field Guide, issue #80.
+#
+# The control promotion with its citation removed: the PR still
+# names its rule and its window, but cites no flow-evidence file.
+# This is the issue's second core failure: audit→enforce promotion
+# as a human assertion with no evidence — promotion is evidence, not
+# assertion, and the gate must fail exactly once.
+
+pr: PR-512
+rule: R3
+to: enforce
+window:
+  from: 2026-10-01
+  to: 2026-10-15

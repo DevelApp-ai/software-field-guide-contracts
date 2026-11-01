@@ -1,0 +1,30 @@
+# BROKEN VARIANT — not-in-contract — The Software Field Guide, issue #80.
+#
+# The control renders with ONE row added: the cloud fabric now
+# renders R9 (web → db, tcp/8080), a rule the contract never
+# declared. This is the issue's mirror failure mode: a render
+# carrying a rule the contract never had — a hand edit, a stale
+# template, a fabric rendering somebody else's contract. The gate
+# must catch it exactly once, citing the renders file and the
+# contract file.
+
+version: 1
+reviewedOn: 2026-10-18
+
+fabrics:
+  - cloud
+  - host-firewall
+
+rules:
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R2, direction: egress, type: tcp, port: 5432}
+  - {fabric: host-firewall, rule: R2, direction: egress, type: tcp, port: 5432}
+  - {fabric: cloud, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R4, direction: ingress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R4, direction: ingress, type: tcp, port: 443}
+
+  # R9 on cloud — a rule the contract never declared. The seeded
+  # phantom: the fabric is rendering somebody else's contract.
+  - {fabric: cloud, rule: R9, direction: egress, type: tcp, port: 8080}

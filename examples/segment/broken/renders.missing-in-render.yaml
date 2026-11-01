@@ -1,0 +1,29 @@
+# BROKEN VARIANT — missing-in-render — The Software Field Guide, issue #80.
+#
+# The control renders with ONE row removed: the cloud fabric's render
+# of R2 (api → db, tcp/5432) is gone. The contract still declares
+# R2, the host-firewall still renders it — only the cloud fabric went
+# silent. This is the issue's first failure mode: a rule added to the
+# contract (or a render lagging behind) that drifts silently until
+# the gate cites both documents. The gate must catch it exactly once,
+# citing the contract file and the renders file.
+
+version: 1
+reviewedOn: 2026-10-18
+
+fabrics:
+  - cloud
+  - host-firewall
+
+rules:
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+
+  # R2 on cloud is MISSING — the seeded drift.
+
+  - {fabric: host-firewall, rule: R2, direction: egress, type: tcp, port: 5432}
+
+  - {fabric: cloud, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R4, direction: ingress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R4, direction: ingress, type: tcp, port: 443}

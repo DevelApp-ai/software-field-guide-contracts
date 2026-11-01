@@ -42,6 +42,13 @@
 #                      [ERASURE_KEYS=... ERASURE_CASE=...] [TODAY=...]
 #   make erasure-demo  the done-when proof: a replica without its sweep
 #                      record caught citing the store (runs the whole demo)
+#   make check-segment validate the segment contract (segments, rules,
+#                      TTL-bound exceptions) [CONTRACT=...] [TODAY=...]
+#   make segment-gate gate renders, flow evidence, and a promotion PR
+#                      against the contract [CONTRACT=... RENDERS=...
+#                      FLOWS=... PROMOTION=...] [TODAY=...]
+#   make segment-demo  the done-when proof: a render missing one fabric
+#                      caught citing both files (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -68,6 +75,10 @@ ACTIONS_REGISTRY ?= examples/actions/registry.yaml
 ACTIONS_MANIFEST ?= examples/actions/manifest.yaml
 ERASURE_KEYS ?= examples/erasure/keys.yaml
 ERASURE_CASE ?= examples/erasure/case-forgotten.yaml
+CONTRACT ?= examples/segment/contract.yaml
+RENDERS ?= examples/segment/renders.yaml
+FLOWS ?= examples/segment/flows.yaml
+PROMOTION ?= examples/segment/promotion.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -76,6 +87,7 @@ ERASURE_CASE ?= examples/erasure/case-forgotten.yaml
 	check-alerts alerts-gate alerts-demo \
 	check-actions actions-gate actions-demo \
 	check-erasure erasure-gate erasure-demo \
+	check-segment segment-gate segment-demo \
 	examples ci
 
 fmt:
@@ -114,6 +126,9 @@ build:
 	$(OPA) build -t wasm -e erasure/audit -o build/erasure.tar.gz policies
 	tar -xzf build/erasure.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/erasure.wasm
+	$(OPA) build -t wasm -e segment/audit -o build/segment.tar.gz policies
+	tar -xzf build/segment.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/segment.wasm
 
 site: build
 	rm -rf site-build
@@ -508,6 +523,127 @@ erasure-demo:
 	@echo "caught as expected: key/destroyed-by-required"
 	@echo "--- erasure demo: all done-when proofs passed ---"
 
+# Segment: validate the contract (segments, rules between declared
+# segments, TTL-bound exceptions unexpired) alone.
+check-segment:
+	@test -f "$(CONTRACT)" || { echo "usage: make check-segment [CONTRACT=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTRACT)' \
+		| jq -cs --arg today "$(TODAY)" '{contract: .[0], today: $$today}' \
+		| $(OPA) eval -d policies -I 'data.segment.validate' --format=pretty | tee build/check-segment.json
+	@jq -e '.valid == true' build/check-segment.json > /dev/null \
+		|| { echo "check-segment: the segment contract is invalid — findings above"; exit 1; }
+
+# Gate the rendered policies, the flow evidence, and the promotion PR
+# against the segment contract: every rule present in every declared
+# render, no render carrying a rule the contract never had, the
+# modeled subset agreeing, the promotion citing evidence it holds —
+# a rule is not enforced until every fabric says so. Fails (exit 1)
+# when the gate finds errors; a dead rule is a review flag, not a
+# failure, and the verdict says review.
+segment-gate:
+	@test -f "$(CONTRACT)" || { echo "usage: make segment-gate [CONTRACT=... RENDERS=... FLOWS=... PROMOTION=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTRACT)' '$(RENDERS)' '$(FLOWS)' '$(PROMOTION)' \
+		| jq -cs --arg today "$(TODAY)" --arg contractFile "$(CONTRACT)" --arg rendersFile "$(RENDERS)" --arg flowsFile "$(FLOWS)" \
+			'{contract: .[0], renders: .[1], flows: .[2], promotion: .[3], today: $$today, contractFile: $$contractFile, rendersFile: $$rendersFile, flowsFile: $$flowsFile}' \
+		| $(OPA) eval -d policies -I 'data.segment.gate' --format=pretty | tee build/segment-gate.json
+	@jq -e '.valid == true' build/segment-gate.json > /dev/null \
+		|| { echo "segment-gate: the render-consistency gate found errors above"; exit 1; }
+
+# The done-when proof for book issue #80: a render missing one fabric
+# is caught citing both files. Runs the control end to end, then proves
+# all the broken variants fail loudly (or flag honestly).
+segment-demo:
+	@echo "--- 1. the segment contract validates ---"
+	@$(MAKE) check-segment TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) segment-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/segment-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/segment-gate.json; exit 1; }
+	@echo "control verdict: consistent — one contract, two fabrics, every rule rendered everywhere"
+	@echo "--- 3. a rule missing from one render is caught citing BOTH files ---"
+	@if $(MAKE) segment-gate RENDERS=examples/segment/broken/renders.missing-in-render.yaml TODAY=$(ANCHOR_TODAY) > build/segment-missing.txt 2>&1; \
+		then echo "FAIL: the missing render was not caught"; cat build/segment-missing.txt; exit 1; \
+		else grep -q 'render/rule-missing' build/segment-missing.txt \
+			|| { echo "FAIL: the gate failed without the missing-render rule"; cat build/segment-missing.txt; exit 1; }; \
+		fi
+	@grep -q 'examples/segment/contract.yaml' build/segment-missing.txt \
+		|| { echo "FAIL: the finding does not cite the contract file"; cat build/segment-missing.txt; exit 1; }
+	@grep -q 'renders.missing-in-render.yaml' build/segment-missing.txt \
+		|| { echo "FAIL: the finding does not cite the renders file"; cat build/segment-missing.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-missing.txt; exit 1; }
+	@echo "caught as expected: render/rule-missing citing the contract file and the renders file"
+	@echo "--- 4. a render carrying a rule the contract never had is caught ---"
+	@if $(MAKE) segment-gate RENDERS=examples/segment/broken/renders.not-in-contract.yaml TODAY=$(ANCHOR_TODAY) > build/segment-phantom.txt 2>&1; \
+		then echo "FAIL: the phantom rule was not caught"; cat build/segment-phantom.txt; exit 1; \
+		else grep -q 'render/rule-unknown' build/segment-phantom.txt \
+			|| { echo "FAIL: the gate failed without the phantom-rule rule"; cat build/segment-phantom.txt; exit 1; }; \
+		fi
+	@grep -q "'R9'" build/segment-phantom.txt \
+		|| { echo "FAIL: the finding does not name the phantom rule"; cat build/segment-phantom.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-phantom.txt; exit 1; }
+	@echo "caught as expected: render/rule-unknown naming R9"
+	@echo "--- 5. a direction disagreement inside the modeled subset is caught ---"
+	@if $(MAKE) segment-gate RENDERS=examples/segment/broken/renders.direction-mismatch.yaml TODAY=$(ANCHOR_TODAY) > build/segment-direction.txt 2>&1; \
+		then echo "FAIL: the direction mismatch was not caught"; cat build/segment-direction.txt; exit 1; \
+		else grep -q 'render/direction-mismatch' build/segment-direction.txt \
+			|| { echo "FAIL: the gate failed without the direction rule"; cat build/segment-direction.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-direction.txt; exit 1; }
+	@echo "caught as expected: render/direction-mismatch"
+	@echo "--- 6. a type disagreement inside the modeled subset is caught ---"
+	@if $(MAKE) segment-gate RENDERS=examples/segment/broken/renders.type-mismatch.yaml TODAY=$(ANCHOR_TODAY) > build/segment-type.txt 2>&1; \
+		then echo "FAIL: the type mismatch was not caught"; cat build/segment-type.txt; exit 1; \
+		else grep -q 'render/type-mismatch' build/segment-type.txt \
+			|| { echo "FAIL: the gate failed without the type rule"; cat build/segment-type.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-type.txt; exit 1; }
+	@echo "caught as expected: render/type-mismatch"
+	@echo "--- 7. a promotion without flow evidence fails ---"
+	@if $(MAKE) segment-gate PROMOTION=examples/segment/broken/promotion.no-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/segment-no-evidence.txt 2>&1; \
+		then echo "FAIL: the promotion without evidence passed"; cat build/segment-no-evidence.txt; exit 1; \
+		else grep -q 'promotion/no-flow-evidence' build/segment-no-evidence.txt \
+			|| { echo "FAIL: the gate failed without the evidence rule"; cat build/segment-no-evidence.txt; exit 1; }; \
+		fi
+	@grep -q "'R3'" build/segment-no-evidence.txt \
+		|| { echo "FAIL: the finding does not name the promoted rule"; cat build/segment-no-evidence.txt; exit 1; }
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-no-evidence.txt; exit 1; }
+	@echo "caught as expected: promotion/no-flow-evidence naming R3 — promotion is evidence, not assertion"
+	@echo "--- 8. a promotion claiming a window its evidence never covered is caught ---"
+	@if $(MAKE) segment-gate PROMOTION=examples/segment/broken/promotion.window-outside-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/segment-window.txt 2>&1; \
+		then echo "FAIL: the outside-evidence promotion passed"; cat build/segment-window.txt; exit 1; \
+		else grep -q 'promotion/window-outside-evidence' build/segment-window.txt \
+			|| { echo "FAIL: the gate failed without the window rule"; cat build/segment-window.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/segment-gate.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-window.txt; exit 1; }
+	@echo "caught as expected: promotion/window-outside-evidence"
+	@echo "--- 9. a rule nothing exercised is flagged for review, not failed ---"
+	@$(MAKE) segment-gate FLOWS=examples/segment/broken/flows.dead-rule.yaml TODAY=$(ANCHOR_TODAY)
+	@grep -q 'flows/dead-rule' build/segment-gate.json \
+		|| { echo "FAIL: the dead rule was not flagged"; cat build/segment-gate.json; exit 1; }
+	@grep -q '"verdict": "review"' build/segment-gate.json \
+		|| { echo "FAIL: the dead rule did not render the review verdict"; cat build/segment-gate.json; exit 1; }
+	@jq -e '.rules[] | select(.rule == "R2" and .verdict == "dead")' build/segment-gate.json > /dev/null \
+		|| { echo "FAIL: the R2 card did not render dead"; cat build/segment-gate.json; exit 1; }
+	@echo "flagged as expected: flows/dead-rule naming R2 — the verdict is review, the gate stays green"
+	@echo "--- 10. a TTL-expired exception is caught at contract time ---"
+	@if $(MAKE) check-segment CONTRACT=examples/segment/broken/contract.ttl-expired.yaml TODAY=$(ANCHOR_TODAY) > build/segment-ttl.txt 2>&1; \
+		then echo "FAIL: the expired exception was not caught"; cat build/segment-ttl.txt; exit 1; \
+		else grep -q 'exception/ttl-expired' build/segment-ttl.txt \
+			|| { echo "FAIL: the contract failed without the TTL rule"; cat build/segment-ttl.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-segment.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/segment-ttl.txt; exit 1; }
+	@echo "caught as expected: exception/ttl-expired"
+	@echo "--- segment demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -524,7 +660,9 @@ examples:
 	$(MAKE) check-erasure TODAY=$(ANCHOR_TODAY)
 	$(MAKE) erasure-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) erasure-gate ERASURE_CASE=examples/erasure/case-pending.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-segment TODAY=$(ANCHOR_TODAY)
+	$(MAKE) segment-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo
 	$(OPA) fmt --fail -l policies

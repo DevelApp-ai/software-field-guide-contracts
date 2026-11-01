@@ -1,0 +1,72 @@
+# Segment contract — The Software Field Guide, issue #80.
+#
+# The microsegmentation chapter's YAML: the segments of the estate
+# and the rules between them — one contract that N fabrics render.
+# Each rule names its id (what a render or a promotion cites), its
+# from and to segments, its direction, type, and port inside the
+# modeled subset (ingress or egress, tcp or udp — the gate is honest
+# about what it models, not pretending to full eBPF or CIL
+# semantics), and its mode: audit (observed, not enforced) or enforce.
+# Exceptions are TTL-bound by design: an exception carries its reason
+# in words and the date it expires — an exception without its expiry
+# is not an exception, it is the rule.
+#
+# The estate is seeded, after the chapter's five-segment model:
+# web, api, db, worker, external. Example dates are chosen relative
+# to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Platform team
+
+segments:
+  - web
+  - api
+  - db
+  - worker
+  - external
+
+rules:
+  # The storefront's front door: the web tier may call the api tier
+  # over TLS, out of web, into api. Enforced everywhere.
+  - id: R1
+    from: web
+    to: api
+    type: tcp
+    port: 443
+    direction: egress
+    mode: enforce
+
+  # The api tier may reach the primary database. Enforced everywhere.
+  - id: R2
+    from: api
+    to: db
+    type: tcp
+    port: 5432
+    direction: egress
+    mode: enforce
+
+  # The batch worker may call the api tier — observed in audit mode
+  # since the migration, awaiting a promotion PR with flow evidence
+  # (see promotion.yaml): promotion is evidence, not assertion.
+  - id: R3
+    from: worker
+    to: api
+    type: tcp
+    port: 443
+    direction: egress
+    mode: audit
+
+  # The internet may enter the web tier on TLS. Enforced everywhere,
+  # with one TTL-bound exception: the pen-test window, which expires
+  # on its recorded date and is not renewed silently.
+  - id: R4
+    from: external
+    to: web
+    type: tcp
+    port: 443
+    direction: ingress
+    mode: enforce
+    exceptions:
+      - reason: pen-test window — the load generator's traffic is expected until the contract is re-rendered
+        expiresOn: 2026-12-01

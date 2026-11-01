@@ -1,0 +1,71 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/segment-flows.schema.json",
+	"title": "Flow evidence",
+	"description": "The flow evidence, as defined in The Software Field Guide, issue #80: the flows observed during a named audit window, aggregated per from/to/type/port tuple. This is the file a promotion PR cites (promotion is evidence, not assertion) and the substrate the dead-rule review reads — a rule that matched zero flows across the window is a rule nobody exercised, and it gets the review flag rather than silence. The validator additionally enforces the semantic rules a JSON schema cannot: the window real and not in the future, the evidence fresh (reviewed within 365 days), and the counts positive integers.",
+	"type": "object",
+	"required": ["reviewedOn", "window", "flows"],
+	"additionalProperties": true,
+	"properties": {
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the evidence was last reviewed, YYYY-MM-DD. Evidence has a shelf life — stale flow evidence says nothing about the estate rendering today."
+		},
+		"window": {
+			"type": "object",
+			"required": ["from", "to"],
+			"additionalProperties": false,
+			"description": "The audit window the flows were observed in. Observed flows without the window that observed them are evidence about no time at all; the window may not end in the future.",
+			"properties": {
+				"from": {
+					"type": "string",
+					"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+					"description": "The day the window opened, YYYY-MM-DD."
+				},
+				"to": {
+					"type": "string",
+					"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+					"description": "The day the window closed, YYYY-MM-DD. Not after today — evidence cannot cover the future."
+				}
+			}
+		},
+		"flows": {
+			"type": "array",
+			"description": "The observed flows, aggregated per from/to/type/port tuple. A flow matches the contract rule with the same tuple; a rule with zero matched flows across the window is flagged for review.",
+			"items": {
+				"type": "object",
+				"required": ["from", "to", "type", "port", "count"],
+				"additionalProperties": false,
+				"properties": {
+					"from": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The segment the traffic left."
+					},
+					"to": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The segment the traffic entered."
+					},
+					"type": {
+						"type": "string",
+						"enum": ["tcp", "udp"],
+						"description": "The protocol, inside the modeled subset."
+					},
+					"port": {
+						"type": "integer",
+						"minimum": 1,
+						"maximum": 65535,
+						"description": "The port the traffic entered."
+					},
+					"count": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "The observed flow count for this tuple across the window."
+					}
+				}
+			}
+		}
+	}
+}

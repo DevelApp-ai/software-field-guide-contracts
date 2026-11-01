@@ -1,0 +1,27 @@
+# BROKEN VARIANT — direction mismatch — The Software Field Guide, issue #80.
+#
+# The control renders with ONE field changed: the host-firewall
+# renders R4 (external → web, tcp/443) as egress, while the contract
+# says ingress. Within the modeled subset the two documents now
+# disagree about which way the traffic flows — the gate names the
+# field, the fabric, and both documents. The seeded mismatch must be
+# caught exactly once.
+
+version: 1
+reviewedOn: 2026-10-18
+
+fabrics:
+  - cloud
+  - host-firewall
+
+rules:
+  - {fabric: cloud, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R1, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R2, direction: egress, type: tcp, port: 5432}
+  - {fabric: host-firewall, rule: R2, direction: egress, type: tcp, port: 5432}
+  - {fabric: cloud, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: host-firewall, rule: R3, direction: egress, type: tcp, port: 443}
+  - {fabric: cloud, rule: R4, direction: ingress, type: tcp, port: 443}
+
+  # R4 rendered EGRESS on host-firewall — the contract says ingress.
+  - {fabric: host-firewall, rule: R4, direction: egress, type: tcp, port: 443}
