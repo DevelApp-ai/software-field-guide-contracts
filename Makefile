@@ -907,6 +907,7 @@ citizen-demo:
 	@echo "--- citizen demo: all done-when proofs passed ---"
 
 # Validate the component package manifest alone: the component-package
+# chapter's package-as-data — its name, version, and tier, the artifact
 # digest it publishes, the signature and attestation recorded over that
 # digest, its provenance, and the dependencies it pins by digest.
 # Conformance gate, not advisor: any finding fails.
