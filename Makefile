@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the eleven wasm bundles into build/wasm/
+#   make build         compile the twelve wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -56,6 +56,12 @@
 #                      [INGRESS_CASE=... INGRESS_DRILL=...] [TODAY=...]
 #   make ingress-demo the done-when proof: a kill path never rehearsed
 #                      caught citing the drill record (runs the whole demo)
+#   make check-component validate the component package manifest
+#                      [COMPONENT_PACKAGE=...] [TODAY=YYYY-MM-DD]
+#   make component-gate gate the package against the component registry
+#                      [COMPONENT_PACKAGE=... COMPONENT_REGISTRY=...] [TODAY=...]
+#   make component-demo the done-when proof: an unregistered package caught
+#                      citing both files (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -91,6 +97,8 @@ INGRESS_DRILL ?= examples/ingress/drill.yaml
 CITIZEN_MANIFEST ?= examples/citizen/manifest.yaml
 CITIZEN_SPEC ?= examples/citizen/spec.yaml
 CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
+COMPONENT_PACKAGE ?= examples/component/package.yaml
+COMPONENT_REGISTRY ?= examples/component/registry.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -102,6 +110,7 @@ CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
 	check-segment segment-gate segment-demo \
 	check-ingress ingress-gate ingress-demo \
 	check-citizen citizen-gate citizen-demo \
+	check-component component-gate component-demo \
 	examples ci
 
 fmt:
@@ -149,6 +158,9 @@ build:
 	$(OPA) build -t wasm -e citizen/audit -o build/citizen.tar.gz policies
 	tar -xzf build/citizen.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/citizen.wasm
+	$(OPA) build -t wasm -e component/audit -o build/component.tar.gz policies
+	tar -xzf build/component.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/component.wasm
 
 site: build
 	rm -rf site-build
@@ -894,6 +906,106 @@ citizen-demo:
 	@echo "caught as expected: manifest/version-required — the advisor refuses to answer on a document it cannot read"
 	@echo "--- citizen demo: all done-when proofs passed ---"
 
+# Validate the component package manifest alone: the component-package
+# digest it publishes, the signature and attestation recorded over that
+# digest, its provenance, and the dependencies it pins by digest.
+# Conformance gate, not advisor: any finding fails.
+check-component:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make check-component [COMPONENT_PACKAGE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" '{package: .[0], today: $$today, packageFile: $$packageFile}' \
+		| $(OPA) eval -d policies -I 'data.component.validate' --format=pretty | tee build/check-component.json
+	@jq -e '.valid == true' build/check-component.json > /dev/null \
+		|| { echo "check-component: the package manifest is not in conformance — findings above"; exit 1; }
+
+# Gate the component package against the component registry — the
+# estate's admitted packages, each as a component, version, tier, and
+# digest row. Conformance gate, not advisor: an unregistered package,
+# an artifact drifted from its registration, an unresolved
+# dependency, a stale pin, and a customer-tier package depending
+# downward are all refused, not advised.
+component-gate:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make component-gate [COMPONENT_PACKAGE=... COMPONENT_REGISTRY=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' '$(COMPONENT_REGISTRY)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" --arg registryFile "$(COMPONENT_REGISTRY)" \
+			'{package: .[0], registry: .[1], today: $$today, packageFile: $$packageFile, registryFile: $$registryFile}' \
+		| $(OPA) eval -d policies -I 'data.component.gate' --format=pretty | tee build/component-gate.json
+	@jq -e '.valid == true' build/component-gate.json > /dev/null \
+		|| { echo "component-gate: the package is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #101: the component package
+# conformance gate refuses. Runs the control package end to end,
+# then proves every drift variant bites exactly once — three at
+# validation, three at the join — and that each bite names the rule
+# and renders its verdict honestly.
+component-demo:
+	@echo "--- 1. the package manifest validates ---"
+	@$(MAKE) check-component TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/component-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/component-gate.json; exit 1; }
+	@jq -e '.cards | length == 2' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per judged item"; cat build/component-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per judged item"
+	@echo "--- 3. an unsigned artifact is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.no-signature.yaml TODAY=$(ANCHOR_TODAY) > build/component-no-signature.txt 2>&1; \
+		then echo "FAIL: the unsigned artifact passed validation"; cat build/component-no-signature.txt; exit 1; \
+		else grep -q 'signature/required' build/component-no-signature.txt \
+			|| { echo "FAIL: the gate failed without the signature rule"; cat build/component-no-signature.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: signature/required — an unsigned artifact is an artifact nobody vouches for"
+	@echo "--- 4. an inconsistent signature is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.wrong-signed-digest.yaml TODAY=$(ANCHOR_TODAY) > build/component-wrong-digest.txt 2>&1; \
+		then echo "FAIL: the mismatched signature passed validation"; cat build/component-wrong-digest.txt; exit 1; \
+		else grep -q 'signature/digest-mismatch' build/component-wrong-digest.txt \
+			|| { echo "FAIL: the gate failed without the mismatch rule"; cat build/component-wrong-digest.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: signature/digest-mismatch — the recorded evidence is not even internally consistent"
+	@echo "--- 5. a general-tier package with a dependency is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.general-with-dependency.yaml TODAY=$(ANCHOR_TODAY) > build/component-general.txt 2>&1; \
+		then echo "FAIL: the general-tier dependency passed validation"; cat build/component-general.txt; exit 1; \
+		else grep -q 'dependency/general-forbidden' build/component-general.txt \
+			|| { echo "FAIL: the gate failed without the general-tier rule"; cat build/component-general.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: dependency/general-forbidden — the baseline everything else builds on depends on nothing"
+	@echo "--- 6. a stale pin is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_PACKAGE=examples/component/broken/package.stale-pin.yaml TODAY=$(ANCHOR_TODAY) > build/component-stale-pin.txt 2>&1; \
+		then echo "FAIL: the stale pin passed the gate"; cat build/component-stale-pin.txt; exit 1; \
+		else grep -q 'gate/dependency-digest-mismatch' build/component-stale-pin.txt \
+			|| { echo "FAIL: the gate failed without the stale-pin rule"; cat build/component-stale-pin.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/dependency-digest-mismatch — a pin to something the estate never admitted"
+	@echo "--- 7. a downward tier is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_PACKAGE=examples/component/broken/package.customer-on-project.yaml TODAY=$(ANCHOR_TODAY) > build/component-downward.txt 2>&1; \
+		then echo "FAIL: the downward tier passed the gate"; cat build/component-downward.txt; exit 1; \
+		else grep -q 'gate/dependency-hierarchy-violation' build/component-downward.txt \
+			|| { echo "FAIL: the gate failed without the hierarchy rule"; cat build/component-downward.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/dependency-hierarchy-violation — the tiers are one-way, and this dependency points down"
+	@echo "--- 8. an unregistered package is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_REGISTRY=examples/component/broken/registry.missing-package.yaml TODAY=$(ANCHOR_TODAY) > build/component-unregistered.txt 2>&1; \
+		then echo "FAIL: the unregistered package passed the gate"; cat build/component-unregistered.txt; exit 1; \
+		else grep -q 'gate/package-unregistered' build/component-unregistered.txt \
+			|| { echo "FAIL: the gate failed without the registration rule"; cat build/component-unregistered.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/package-unregistered — a package the estate never admitted is a package the estate never vouched for"
+	@echo "--- component demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -916,7 +1028,9 @@ examples:
 	$(MAKE) ingress-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-citizen TODAY=$(ANCHOR_TODAY)
 	$(MAKE) citizen-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-component TODAY=$(ANCHOR_TODAY)
+	$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo
 	$(OPA) fmt --fail -l policies

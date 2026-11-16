@@ -1,0 +1,116 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/component-package.schema.json",
+	"title": "Component package manifest",
+	"description": "The component package manifest, as defined in The Software Field Guide, issue #101: the component-package chapter's YAML — the package as data. The manifest declares the package's name, version, and tier, the sha256 artifact digest it publishes, the signature and attestation recorded over that digest, its provenance, and the dependencies it pins by digest. Judged at the package gate against the component registry, as a conformance gate — not an advisor: an unregistered package, an artifact drifted from its registration, an unresolved dependency, a stale pin, and a customer-tier package depending downward are all refused. The validator is honest about what it models: it checks the evidence facts are recorded and internally consistent (the signed digest equals the artifact digest, the pins equal the registry's digests), not that signatures are cryptographically valid. This schema mirrors the shape rules of the Rego validator (policies/component); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, the signedDigest equal to the artifactDigest, no duplicate dependencies, a general-tier package declaring no dependencies, and the five drifts judged at the join.",
+	"type": "object",
+	"required": ["component", "version", "hierarchy", "reviewedOn", "owner", "artifactDigest", "signature", "attestation", "provenance", "dependencies"],
+	"additionalProperties": true,
+	"properties": {
+		"component": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The name of the component the manifest packages. The registry admits packages by name."
+		},
+		"version": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The package's version string (e.g. \"1.4.0\"). The registry registers component+version, and drift is judged per version."
+		},
+		"hierarchy": {
+			"type": "string",
+			"enum": ["general", "customer", "project"],
+			"description": "The package's tier. General is the baseline everything else may build on (and depends on nothing); customer builds on general and customer; project builds on anything. The direction is one-way."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the manifest was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the package. A package with an owner and a review cadence is the discipline."
+		},
+		"artifactDigest": {
+			"type": "string",
+			"pattern": "^[a-f0-9]{64}$",
+			"description": "The sha256 digest of the artifact the manifest publishes. A package without a digest is a name, not an artifact."
+		},
+		"signature": {
+			"type": "object",
+			"description": "The signature recorded over the artifact digest. The validator checks the signedDigest equals the artifactDigest; that the signature is cryptographically valid is the signing infrastructure's word, not policy's.",
+			"required": ["keyId", "signedDigest"],
+			"additionalProperties": true,
+			"properties": {
+				"keyId": {
+					"type": "string",
+					"minLength": 1,
+					"description": "The key that signed the artifact digest."
+				},
+				"signedDigest": {
+					"type": "string",
+					"minLength": 1,
+					"description": "The digest the signature was recorded over. The validator requires it to equal the artifactDigest."
+				}
+			}
+		},
+		"attestation": {
+			"type": "object",
+			"description": "The attestation recorded with the package: what it claims to be, and who checked.",
+			"required": ["statement", "by"],
+			"additionalProperties": true,
+			"properties": {
+				"statement": {
+					"type": "string",
+					"minLength": 1,
+					"description": "What the package claims to be. 'No comment' is not an attestation."
+				},
+				"by": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Who attested. A claim without a claimant is nobody's word."
+				}
+			}
+		},
+		"provenance": {
+			"type": "object",
+			"description": "Where the artifact came from, and which commit built it. An artifact without a commit is an artifact nobody can rebuild.",
+			"required": ["source", "commit"],
+			"additionalProperties": true,
+			"properties": {
+				"source": {
+					"type": "string",
+					"minLength": 1,
+					"description": "The source the artifact was built from."
+				},
+				"commit": {
+					"type": "string",
+					"minLength": 1,
+					"description": "The commit the artifact was built from."
+				}
+			}
+		},
+		"dependencies": {
+			"type": "array",
+			"description": "The packages this one builds on, each pinned by sha256 digest. A dependency pinned by name alone is a dependency that can change under the package.",
+			"items": {
+				"type": "object",
+				"required": ["package", "digest"],
+				"additionalProperties": true,
+				"properties": {
+					"package": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The dependency's package name. The gate resolves it against the component registry."
+					},
+					"digest": {
+						"type": "string",
+						"pattern": "^[a-f0-9]{64}$",
+						"description": "The digest the package pins the dependency at. The gate requires the registry to carry the package at exactly this digest."
+					}
+				}
+			}
+		}
+	}
+}
