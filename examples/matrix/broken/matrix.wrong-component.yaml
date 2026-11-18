@@ -1,0 +1,42 @@
+# Broken variant: the matrix for a different component — book
+# issue #102.
+#
+# The render matrix names storefront-theme, but the gate was given
+# the payments-checkout package manifest (examples/component/
+# package.yaml): the renders are being judged against somebody
+# else's package. The gate refuses with gate/component-mismatch,
+# citing both documents.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The drift: a component the manifest never packaged.
+component: storefront-theme
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

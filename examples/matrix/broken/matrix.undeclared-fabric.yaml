@@ -1,0 +1,48 @@
+# Broken variant: a render row on a fabric the matrix never
+# declared — book issue #102.
+#
+# The gcp-eu render row cites a fabric that is not in the fabrics
+# list: either the row renders onto a fabric nobody owns, or the
+# fabric list forgot a fabric — the two disagree. The validator
+# fails with render/fabric-undeclared and the gate renders the
+# unreadable verdict.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # The drift: a render row for a fabric the matrix never declared.
+  - fabric: gcp-eu
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

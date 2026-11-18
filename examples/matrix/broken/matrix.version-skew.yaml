@@ -1,0 +1,39 @@
+# Broken variant: version skew between fabrics — book issue #102.
+#
+# One fabric quietly running a different release: aws-eu-central
+# renders v1.3.0 while the package manifest (examples/component/
+# package.yaml) publishes v1.4.0. The gate refuses with
+# gate/render-version-skew, citing the fabric and both versions.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # The drift: this fabric never picked up the 1.4.0 release.
+  - fabric: aws-eu-central
+    version: 1.3.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

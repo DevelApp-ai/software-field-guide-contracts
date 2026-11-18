@@ -1,0 +1,42 @@
+# Broken variant: a binding the package never declared — book
+# issue #102.
+#
+# The mirror image of the missing binding: onprem-vsphere holds a
+# shadow-scan binding in force that the package manifest
+# (examples/component/package.yaml) never declared — a fabric
+# enforcing a policy the package never shipped. The gate refuses
+# with gate/binding-undeclared.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # The drift: a binding nobody declared, in force on one fabric.
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+      - {policy: shadow-scan, path: /policies/shadow-scan.rego}

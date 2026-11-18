@@ -1,0 +1,34 @@
+# Broken variant: a fabric with no render at all — book issue #102.
+#
+# The matrix still declares onprem-vsphere, but its render row is
+# gone: coverage claimed and never delivered. The gate refuses with
+# gate/fabric-unrendered, citing the fabric.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # The drift: the onprem-vsphere row was deleted — the fabric is
+  # still declared, still covered in the estate's planning
+  # conversations, and rendering nothing.
