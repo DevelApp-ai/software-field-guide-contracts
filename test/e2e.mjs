@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the twelve policy.wasm builds and evaluates
+// End-to-end smoke test: loads the thirteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -223,6 +223,7 @@ const segmentPolicy = await load('segment')
 const ingressPolicy = await load('ingress')
 const citizenPolicy = await load('citizen')
 const componentPolicy = await load('component')
+const matrixPolicy = await load('matrix')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1354,6 +1355,119 @@ r = componentAudit({ package: { ...componentPackage, version: null } })
 assert(
 	hasFinding(r, 'package/version-required') && r.valid === false && r.verdict === 'unreadable',
 	'a package the gate cannot read fails honestly in wasm',
+)
+
+// --- matrix ----------------------------------------------------------------
+//
+// Judged by the composed matrix/audit entrypoint — the control
+// renders consistent with one card per declared fabric, and every
+// seeded drift is refused (a conformance gate, not an advisor: the
+// renders are not believed until every fabric agrees).
+
+const matrixPackage = {
+	...componentPackage,
+	policyBindings: [
+		{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+		{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+	],
+}
+
+const matrixRenders = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	component: 'payments-checkout',
+	fabrics: ['azure-west-europe', 'aws-eu-central', 'onprem-vsphere'],
+	renders: [
+		{
+			fabric: 'azure-west-europe',
+			version: '1.4.0',
+			digest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+			bindings: [
+				{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+				{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+			],
+		},
+		{
+			fabric: 'aws-eu-central',
+			version: '1.4.0',
+			digest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+			bindings: [
+				{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+				{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+			],
+		},
+		{
+			fabric: 'onprem-vsphere',
+			version: '1.4.0',
+			digest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+			bindings: [
+				{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+				{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+			],
+		},
+	],
+}
+
+const matrixAudit = (extra) => matrixPolicy.evaluate({
+	package: matrixPackage,
+	matrix: matrixRenders,
+	today,
+	packageFile: 'package.yaml',
+	matrixFile: 'matrix.yaml',
+	...extra,
+})[0].result
+
+r = matrixAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.fabrics.length === 3,
+	'the matrix control passes the audit in wasm and renders consistent',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, renders: matrixRenders.renders.map((x) => x.fabric === 'aws-eu-central' ? { ...x, version: '1.3.0' } : x) } })
+assert(
+	hasFinding(r, 'gate/render-version-skew') && r.valid === false && r.verdict === 'drifts',
+	'a fabric on another release is refused in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, renders: matrixRenders.renders.map((x) => x.fabric === 'onprem-vsphere' ? { ...x, digest: '4ea0ac5c92c4939f8902c75406b4f583942f922272cfc7b94eac70abdab97e80' } : x) } })
+assert(
+	hasFinding(r, 'gate/render-digest-drift') && r.valid === false && r.verdict === 'drifts',
+	'a re-render that swapped the artifact is refused in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, renders: matrixRenders.renders.map((x) => x.fabric === 'aws-eu-central' ? { ...x, bindings: x.bindings.filter((b) => b.policy !== 'tier-egress') } : x) } })
+assert(
+	hasFinding(r, 'gate/binding-missing') && r.valid === false && r.verdict === 'drifts',
+	'a declared binding a fabric never ran is refused in wasm',
+)
+assert(
+	r.fabrics.some((c) => c.fabric === 'aws-eu-central' && c.verdict === 'drifts'),
+	'the fabric card renders drifts in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, renders: matrixRenders.renders.map((x) => x.fabric === 'onprem-vsphere' ? { ...x, bindings: [...x.bindings, { policy: 'shadow-scan', path: '/policies/shadow-scan.rego' }] } : x) } })
+assert(
+	hasFinding(r, 'gate/binding-undeclared') && r.valid === false && r.verdict === 'drifts',
+	'a binding in force the package never declared is refused in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, renders: matrixRenders.renders.filter((x) => x.fabric !== 'onprem-vsphere') } })
+assert(
+	hasFinding(r, 'gate/fabric-unrendered') && r.valid === false && r.verdict === 'drifts',
+	'a fabric with no render at all is refused in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, component: 'storefront-theme' } })
+assert(
+	hasFinding(r, 'gate/component-mismatch') && r.valid === false && r.verdict === 'drifts',
+	'a matrix for another component is refused in wasm',
+)
+
+r = matrixAudit({ matrix: { ...matrixRenders, reviewedOn: '2024-10-01' } })
+assert(
+	hasFinding(r, 'matrix/reviewed-stale') && r.valid === false && r.verdict === 'unreadable',
+	'a matrix nobody re-reads fails honestly in wasm',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
