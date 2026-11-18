@@ -1,0 +1,42 @@
+# Component registry — The Software Field Guide, issue #101.
+#
+# The component-package chapter's registry: the estate's word —
+# the packages it has admitted, each as a component, version, tier,
+# and digest row. The package gate joins the component package
+# manifest against this registry — a conformance gate, not an
+# advisor: a package is in conformance when a row here carries its
+# component+version at the artifact digest it publishes, every
+# pinned dependency resolves to a row at exactly the pinned digest,
+# and no customer-tier package depends on a project-tier one. The
+# registry's digest is the estate's word; a package whose artifact
+# no longer matches it has drifted from its registration.
+#
+# BROKEN VARIANT — the registry carries no admission for the
+# package under review. The gate refuses: gate/package-unregistered
+# — a package the estate never admitted is a package the estate
+# never vouched for. Bites exactly once at the join.
+#
+# The estate is seeded, after the chapter's worked example: the
+# payments team's customer-tier checkout at the digest it publishes,
+# the platform team's general-tier baseline, and one project-tier
+# row so the tier ladder is seeded on both sides. Example dates are
+# chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-15
+owner: Platform team
+
+# One admission per component+version. The tier is the estate's
+# registration of how reusable the package is: general is the
+# baseline everything may build on, customer builds sideways on
+# general and customer, project builds on anything.
+packages:
+# (the payments-checkout admission deliberately omitted)
+  - component: platform-baseline
+    version: 2.1.0
+    hierarchy: general
+    digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+  - component: storefront-theme
+    version: 0.3.0
+    hierarchy: project
+    digest: 6053401fe5190a3153158f3173dd0f0212e3d0270be5ff30289a76495988e875

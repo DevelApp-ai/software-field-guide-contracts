@@ -1,0 +1,58 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/component-registry.schema.json",
+	"title": "Component registry",
+	"description": "The component registry, as defined in The Software Field Guide, issue #101: the estate's word — the packages it has admitted, each as a component, version, tier, and digest row. Judged at the package gate against the component package manifest, as a conformance gate: a package is in conformance when the registry carries a row for its component+version whose digest equals the artifact digest it publishes, every pinned dependency resolves to a registry row at exactly the pinned digest, and no customer-tier package depends downward. This schema mirrors the shape rules of the Rego validator (policies/component); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, one admission per component+version, and the five drifts judged at the join.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "packages"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the registry. Admission records are versioned like the estate that keeps them."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the registry was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the registry. Admission records without an owner are records nobody maintains."
+		},
+		"packages": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The admitted packages, one row per component+version. The registry's digest is the estate's word; a package whose artifact no longer matches it has drifted from its registration.",
+			"items": {
+				"type": "object",
+				"required": ["component", "version", "hierarchy", "digest"],
+				"additionalProperties": true,
+				"properties": {
+					"component": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The admitted package's component name."
+					},
+					"version": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The version admitted. Admission is per component+version, because the digest is."
+					},
+					"hierarchy": {
+						"type": "string",
+						"enum": ["general", "customer", "project"],
+						"description": "The tier the estate registered the package at. The tier decides what may depend on it: customer-tier packages may build on it only if it is general or customer."
+					},
+					"digest": {
+						"type": "string",
+						"pattern": "^[a-f0-9]{64}$",
+						"description": "The sha256 digest recorded at admission. A package whose published artifact digest no longer equals this row has drifted from its registration."
+					}
+				}
+			}
+		}
+	}
+}

@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the eleven policy.wasm builds and evaluates
+// End-to-end smoke test: loads the twelve policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -222,6 +222,7 @@ const erasurePolicy = await load('erasure')
 const segmentPolicy = await load('segment')
 const ingressPolicy = await load('ingress')
 const citizenPolicy = await load('citizen')
+const componentPolicy = await load('component')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1236,6 +1237,123 @@ r = citizenAudit({ manifest: { ...citizenManifest, version: null } })
 assert(
 	hasFinding(r, 'manifest/version-required') && r.valid === false && r.verdict === 'unreadable',
 	'a manifest the advisor cannot read fails honestly in wasm',
+)
+
+// --- component ------------------------------------------------------------
+//
+// Judged by the composed component/audit entrypoint — the control
+// renders consistent with one card per judged item, and every seeded
+// drift is refused (a conformance gate, not an advisor: the package
+// does not ship until the drift is fixed).
+
+const componentPackage = {
+	component: 'payments-checkout',
+	version: '1.4.0',
+	hierarchy: 'customer',
+	reviewedOn: '2026-10-01',
+	owner: 'Payments team',
+	artifactDigest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+	signature: {
+		keyId: 'key-2026-q4',
+		signedDigest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+	},
+	attestation: {
+		statement: 'the checkout artifact was built by the release pipeline',
+		by: 'release pipeline',
+	},
+	provenance: {
+		source: 'payments/checkout.git',
+		commit: '9f31c0e',
+	},
+	dependencies: [
+		{ package: 'platform-baseline', digest: 'd6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44' },
+	],
+}
+
+const componentRegistry = {
+	version: 1,
+	reviewedOn: '2026-10-15',
+	owner: 'Platform team',
+	packages: [
+		{ component: 'payments-checkout', version: '1.4.0', hierarchy: 'customer', digest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c' },
+		{ component: 'platform-baseline', version: '2.1.0', hierarchy: 'general', digest: 'd6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44' },
+		{ component: 'storefront-theme', version: '0.3.0', hierarchy: 'project', digest: '6053401fe5190a3153158f3173dd0f0212e3d0270be5ff30289a76495988e875' },
+	],
+}
+
+const componentAudit = (extra) => componentPolicy.evaluate({
+	package: componentPackage,
+	registry: componentRegistry,
+	today,
+	packageFile: 'package.yaml',
+	registryFile: 'registry.yaml',
+	...extra,
+})[0].result
+
+r = componentAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.cards.length === 2,
+	'the component control passes the audit in wasm and renders consistent',
+)
+
+r = componentAudit({ package: { ...componentPackage, version: '1.5.0' } })
+assert(
+	hasFinding(r, 'gate/package-unregistered') && r.valid === false && r.verdict === 'drifts',
+	'an unregistered package is refused in wasm',
+)
+assert(
+	r.findings.some((f) => f.rule === 'gate/package-unregistered' && /package\.yaml/.test(f.message) && /registry\.yaml/.test(f.message)),
+	'the unregistered-package finding cites both files in wasm',
+)
+
+r = componentAudit({
+	package: {
+		...componentPackage,
+		artifactDigest: '4ea0ac5c92c4939f8902c75406b4f583942f922272cfc7b94eac70abdab97e80',
+		signature: { keyId: 'key-2026-q4', signedDigest: '4ea0ac5c92c4939f8902c75406b4f583942f922272cfc7b94eac70abdab97e80' },
+	},
+})
+assert(
+	hasFinding(r, 'gate/package-digest-drift') && r.valid === false && r.verdict === 'drifts',
+	'an artifact drifted from its registration is refused in wasm',
+)
+
+r = componentAudit({
+	package: {
+		...componentPackage,
+		dependencies: [{ package: 'platform-baseline', digest: 'aaf1965eeee9f4c7eaf29bbb5b32eb477629a35c41d21dd75037af59b0ee8e1c' }],
+	},
+})
+assert(
+	hasFinding(r, 'gate/dependency-digest-mismatch') && r.valid === false && r.verdict === 'drifts',
+	'a stale pin is refused in wasm',
+)
+assert(
+	r.cards.some((c) => c.area === 'dependencies' && c.verdict === 'drifts'),
+	'the dependency card renders drifts in wasm',
+)
+
+r = componentAudit({
+	package: {
+		...componentPackage,
+		dependencies: [{ package: 'storefront-theme', digest: '6053401fe5190a3153158f3173dd0f0212e3d0270be5ff30289a76495988e875' }],
+	},
+})
+assert(
+	hasFinding(r, 'gate/dependency-hierarchy-violation') && r.valid === false && r.verdict === 'drifts',
+	'a customer-tier package depending downward is refused in wasm',
+)
+
+r = componentAudit({ package: { ...componentPackage, signature: { keyId: 'key-2026-q4', signedDigest: '4ea0ac5c92c4939f8902c75406b4f583942f922272cfc7b94eac70abdab97e80' } } })
+assert(
+	hasFinding(r, 'signature/digest-mismatch') && r.valid === false && r.verdict === 'unreadable',
+	'an internally inconsistent signature fails honestly in wasm',
+)
+
+r = componentAudit({ package: { ...componentPackage, version: null } })
+assert(
+	hasFinding(r, 'package/version-required') && r.valid === false && r.verdict === 'unreadable',
+	'a package the gate cannot read fails honestly in wasm',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
