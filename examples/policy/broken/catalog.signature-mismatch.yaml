@@ -1,0 +1,42 @@
+# Broken variant for the policy demo — The Software Field Guide,
+# issue #103.
+#
+# The drift: the pci-scan row's signature records a signedDigest
+# that differs from the digest the row publishes. The validator
+# does not check cryptographic validity — the key ceremony is the
+# signing infrastructure's word — but it does check that the
+# recorded evidence is internally consistent, and here it is not
+# (policy/signature-digest-mismatch). Caught by
+# `make check-policy POLICY_CATALOG=examples/policy/broken/catalog.signature-mismatch.yaml`.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+policies:
+  - policy: pci-scan
+    version: 3.2.0
+    digest: b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324
+    signature:
+      keyId: key-2026-q4
+      signedDigest: 54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc
+    posture: enforce
+    path: /policies/pci-scan.rego
+
+  - policy: tier-egress
+    version: 1.1.0
+    digest: 54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc
+    signature:
+      keyId: key-2026-q4
+      signedDigest: 54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc
+    posture: enforce
+    path: /policies/tier-egress.rego
+
+  - policy: allowed-regions
+    version: 1.0.3
+    digest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    signature:
+      keyId: key-2026-q4
+      signedDigest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    posture: audit
+    path: /policies/allowed-regions.rego
