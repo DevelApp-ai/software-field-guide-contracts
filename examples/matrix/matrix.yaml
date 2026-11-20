@@ -1,0 +1,68 @@
+# Render matrix — The Software Field Guide, issue #102.
+#
+# One component, many fabrics: the fabrics list declares the N, and
+# each render row is one fabric's rendered copy of the component
+# package manifest (examples/component/package.yaml) — the version
+# it renders, the digest it rendered, and the policy bindings it
+# holds in force. The gate joins the matrix against the manifest and
+# refuses: a fabric rendering a different version, a fabric that
+# re-rendered to a different digest, a declared policy binding
+# missing from one fabric, a fabric holding a binding the package
+# never declared, and a fabric in the matrix with no render at all.
+# The render matrix is the segment render-consistency pattern
+# (issue #80) generalized from network rules to component packages.
+#
+# The estate is seeded, after the render-matrix chapter's worked
+# example: the payments team's checkout package rendered onto three
+# fabrics — an Azure region, an AWS region, and the on-premises
+# vSphere estate — every fabric at the manifest's version and digest
+# with both declared policy bindings in force. The rows are seeded
+# renders, not captures of a real estate's policy languages. Example
+# dates are chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The component this matrix renders — the join runs on this name.
+component: payments-checkout
+
+# The fabrics the matrix covers — the N in "one component, N
+# fabrics". Every fabric here must have a render row; a fabric
+# declared twice is a render the gate cannot count.
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+# Each fabric's rendered copy of the package: the version it
+# renders (the manifest's own version), the digest it rendered (the
+# manifest's artifactDigest), and the policy bindings it holds in
+# force (every binding the manifest declares, at the declared path).
+renders:
+  # azure-west-europe — the Bicep render of the estate's Azure
+  # platform class.
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # aws-eu-central — the CloudFormation render of the AWS landing
+  # zone.
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # onprem-vsphere — the Terraform render of the on-premises
+  # estate.
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

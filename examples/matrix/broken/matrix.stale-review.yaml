@@ -1,0 +1,40 @@
+# Broken variant: a render matrix nobody re-reads — book issue
+# #102.
+#
+# The reviewedOn stamp is more than 365 days before the CI anchor
+# date: a matrix nobody re-renders is a matrix the fabrics silently
+# left behind. The validator fails with matrix/reviewed-stale and
+# the gate renders the unreadable verdict — a question the gate
+# refuses to answer on stale inputs.
+
+version: 1
+reviewedOn: 2024-10-01
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

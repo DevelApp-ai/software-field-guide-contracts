@@ -20,6 +20,8 @@ And it implements the **citizen spec-rails conformance linter** from [book issue
 
 And it implements the **component package conformance validator** from [book issue #101](https://github.com/DevelApp-ai/software-field-guide/issues/101): the component package as data — its name, version, and tier, the sha256 artifact digest it publishes, the signature and attestation recorded over that digest, its provenance, and the dependencies it pins by digest — judged at the package's own release gate against the component registry (the estate's admitted packages). An unregistered package, an artifact drifted from its registration, an unresolved dependency, a stale pin, a customer-tier package depending downward: all refused — a conformance gate, not an advisor, and the package does not ship until the drift is fixed. The validator is honest about what it models: it checks the evidence facts are recorded and internally consistent, not that signatures are cryptographically valid.
 
+And it implements the **render-matrix consistency gate** from [book issue #102](https://github.com/DevelApp-ai/software-field-guide/issues/102): one component package, rendered to N fabrics — and a gate that proves every fabric renders the manifest's version, its pinned digest, and every policy binding it declares, no fabric quietly running a different release and no fabric enforcing a policy the package never shipped. A component is not deployed until every declared fabric agrees.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -56,10 +58,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `component/validate` | one component package manifest alone | `{"package": {...}, "today": "YYYY-MM-DD"}` |
 | `component/gate` | the component registry against the manifest | `{"package": {...}, "registry": {...}, "today": "YYYY-MM-DD"}` |
 | `component/audit` | all of it at once — one verdict, the conformance cards | the superset of the above |
+| `matrix/validate` | one render matrix alone | `{"matrix": {...}, "today": "YYYY-MM-DD"}` |
+| `matrix/gate` | the fabric renders against the component package manifest | `{"package": {...}, "matrix": {...}, "today": "YYYY-MM-DD"}` |
+| `matrix/audit` | all of it at once — one verdict, the fabric cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v1.0** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, and the component package conformance validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v1.0** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, the component package conformance validator, and the render-matrix consistency gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -759,6 +764,85 @@ make component-demo
 #      caught as expected: gate/package-unregistered — a package the estate never admitted is a package the estate never vouched for
 ```
 
+## The render-matrix consistency gate
+
+The render-matrix chapter's YAML joins two documents the component validator already knows. The **component package manifest** gains one field: the policy bindings the package ships, each a policy and the exact path it renders from — absent, the package declares none. The **render matrix** is the estate's word on where that package actually runs: the fabrics it must cover, and each fabric's rendered copy of the package — the version it renders, the digest it rendered, and the bindings it holds in force. The gate joins the two and is honest about the role: a conformance gate, not an advisor — every drift it finds is an error, the gate refuses, and the renders are not believed until every fabric agrees. The verdict ladder separates the failures honestly: `unreadable` (a document the gate cannot read), `drifts` (the join found drift), `consistent`.
+
+```yaml
+# package.yaml — the join field, appended to the manifest from #101
+policyBindings:                  # the policies that must be in force wherever
+  - { policy: pci-scan, path: /policies/pci-scan.rego }
+  - { policy: tier-egress, path: /policies/tier-egress.rego }
+```
+
+```yaml
+# matrix.yaml — one component, N fabrics, each fabric's rendered copy
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout      # the join runs on this name
+
+fabrics:                         # the N — every fabric here needs a render
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0               # the manifest's own version
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:                    # every binding the manifest declares
+      - { policy: pci-scan, path: /policies/pci-scan.rego }
+      - { policy: tier-egress, path: /policies/tier-egress.rego }
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - { policy: pci-scan, path: /policies/pci-scan.rego }
+      - { policy: tier-egress, path: /policies/tier-egress.rego }
+
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - { policy: pci-scan, path: /policies/pci-scan.rego }
+      - { policy: tier-egress, path: /policies/tier-egress.rego }
+```
+
+### What the gate enforces and proofs
+
+- **Loud validation of the render matrix** (`matrix/validate`): the shapes — a version and a fresh review stamp (a matrix nobody re-reads is a matrix the fabrics silently left behind: `matrix/version-required`, `matrix/reviewed-stale`, `matrix/reviewed-in-future`), the owner and component recorded (`matrix/owner-required`, `matrix/component-required`), fabrics declared, named, and unique (`fabrics/required`, `fabric/name-required`, `fabric/name-duplicate`), render rows well-formed (`render/row-invalid`: a fabric, a version, a real sha256 digest, and an array of bindings), each row on a declared fabric (`render/fabric-undeclared`), no fabric rendered twice (`render/row-duplicate`), and every binding a policy at a path, with no duplicates (`render/binding-*`).
+- **The package preconditions** (`matrix/gate`): the manifest must be readable before the join is asked — the same component, version, and digest rules the component gate owns (`package/missing`, `component/name-required`, `package/version-required`, `artifact/digest-required`, `artifact/digest-malformed`), plus the bindings readable as pairs (`package/bindings-must-be-array`, `package/binding-policy-required`, `package/binding-path-required`, `package/binding-duplicate`). The package's own conformance remains the component gate's word, not this one's.
+- **The six drifts** (`matrix/gate`, severity `error` — the gate refuses, `valid: false`, verdict `drifts`): a matrix for another component (`gate/component-mismatch`, citing both files), a fabric with no render at all (`gate/fabric-unrendered`), a fabric on another release (`gate/render-version-skew`), a re-render that swapped the artifact (`gate/render-digest-drift`), a declared binding a fabric never ran (`gate/binding-missing`, once per fabric), and a binding in force the package never declared (`gate/binding-undeclared`) — each citing the fabric and the divergent field, and the binding drifts compared as policy+path pairs, so a path disagreement bites both ways.
+- **The unreadable tier** (severity `error` — verdict `unreadable`): a document the gate cannot read. A stale review stamp and a render on an undeclared fabric both stop the gate before the join is judged — a question the gate refuses to answer on inputs it cannot trust.
+- **One audit** (`matrix/audit`): the composed entrypoint for CI and the playground — one verdict and the fabric cards alongside: one card per declared fabric, each `consistent` or `drifts`, with the finding that resolved it.
+
+The done-when proof from book issue #102 runs as a single target:
+
+```sh
+make matrix-demo
+# → 1. the render matrix validates
+#   2. the control passes the gate and renders consistent
+#      control verdict: consistent — the whole board says so, one card per declared fabric
+#   3. a fabric on another release is caught at the join:
+#      caught as expected: gate/render-version-skew — one fabric quietly running a different release
+#   4. a re-render that swapped the artifact is caught at the join:
+#      caught as expected: gate/render-digest-drift — a digest the package never published
+#   5. a declared binding two fabrics never ran is caught at the join:
+#      caught as expected: gate/binding-missing × 2 — a policy the package shipped that two fabrics never ran
+#   6. a binding the package never declared is caught at the join:
+#      caught as expected: gate/binding-undeclared — a policy in force the package never shipped
+#   7. a fabric with no render at all is caught at the join:
+#      caught as expected: gate/fabric-unrendered — coverage claimed and never delivered
+#   8. a matrix for another component is caught at the join:
+#      caught as expected: gate/component-mismatch — renders judged against somebody else's package
+#   9. a matrix nobody re-reads is caught at validation, and the gate refuses to answer:
+#      caught as expected: matrix/reviewed-stale, verdict unreadable — a question the gate refuses to answer on stale inputs
+#  10. a render on a fabric the matrix never declared is caught at validation:
+#      caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -785,6 +869,8 @@ make check-citizen TODAY=2026-10-20         # the citizen app manifest alone
 make citizen-gate  TODAY=2026-10-20         # the spec + the guardrail registry against the manifest
 make check-component TODAY=2026-10-20         # the component package manifest alone
 make component-gate TODAY=2026-10-20          # the component registry against the manifest
+make check-matrix TODAY=2026-10-20            # the render matrix alone
+make matrix-gate TODAY=2026-10-20             # the fabric renders against the package manifest
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -795,7 +881,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed. The **Matrix gate** tab gates every fabric's rendered copy of the package against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the fabric cards: one per declared fabric, because the renders are not believed until every fabric agrees.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -815,7 +901,8 @@ policies/segment/   lib, model, policy, gate, audit
 policies/ingress/   lib, model, policy, gate, audit
 policies/citizen/  lib, model, policy, gate, audit
 policies/component/ lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component)
+policies/matrix/    lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component + matrix)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
@@ -824,12 +911,14 @@ examples/           valid YAML contracts, a bundle, an authz policy set, the act
                     demo (contract + renders + flows + promotion, plus broken variants),
                     and the ingress demo (posture case + drill record, plus broken variants),
                     and the citizen demo (app manifest + spec + guardrail registry, plus broken variants),
-                    and the component demo (package manifest + component registry, plus broken variants)
+                    and the component demo (package manifest + component registry, plus broken variants),
+                    and the render-matrix demo (package manifest with policy bindings + the
+                    fabric render matrix, plus broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-*/matrix-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, matrix demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -839,7 +928,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the twelve `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the thirteen `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
@@ -848,6 +937,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The linter is an advisor, not a blocker.** Citizen development is judged at the citizen's own PR gate, against the citizen's own spec: escape hatches the platform cannot see, actions outside the rails the spec grants, behaviors without coverage, guardrails below the registry's floor — all advisories, because the point is to surface drift before it ships, not to gate the citizen on the platform's behalf. The red is reserved for the unreadable: a document the advisor cannot parse fails honestly, while drift never fails the build. The spec is the agreement and the app drifts; the floor is the registry's word, not the citizen's. Keeping manifest, spec, and registry as three documents means the same registry can back many apps and every app is re-judged when the platform upgrades. The composed audit dedupes the shared conditions, so the same broken manifest reports once, whichever lens caught it.
 - **Posture is data, and a kill path is rehearsed or it is a hope.** The ingress case records the edge's posture as checkable facts — the zone that contains every wildcard, the default-deny that keeps the allow list an allow list, the rotation clocks on the certificates, the pagers behind the SLOs, the audit coverage of the route classes — and the gate joins the drill record to it, because a kill path declared but never rehearsed is a lever nobody has proven they can pull. Rehearsal staleness is a warning, not an error: a kill path rehearsed once and never again is a question, not an incident. The composed audit dedupes the shared conditions, so the same broken case reports once, whichever lens caught it.
 - **A package is admitted or it does not ship.** The component gate is the conformance mirror of the citizen's advisor: judged at the package's own release gate against a registry the estate owns — an unregistered package, an artifact drifted from its registered digest, an unresolved dependency, a stale pin, and a downward tier all refused, because the estate vouches for what it ships and nothing else. Keeping manifest and registry as two documents means the same registry backs many packages and every package is re-judged when the registry changes — the tiers are the registry's word, not the package's. The verdict ladder dedupes the shared conditions honestly: `unreadable` means a document could not be read, `drifts` means the join found drift — and a drifted artifact re-signed over its drift bites twice, the signature failing before the drift is judged. And the gate says what it models: it checks that the evidence facts are recorded and internally consistent, not that signatures are cryptographically valid — the key ceremony is outside what a policy can check.
+- **One component, N fabrics, one word.** The render-matrix gate is the segment pattern (#80) generalized from network rules to component packages: the package manifest declares what every fabric must render — the version, the pinned digest, and the policy bindings, as policy+path pairs — and the matrix is the estate's word on what each fabric actually rendered. The join runs both ways, like the segment gate's: a declared binding a fabric never ran drifts silently, and a binding in force the package never declared drifts just as silently. Every join finding cites the fabric and the divergent field plus both files, because a mismatch without its documents is a mystery, not a finding. The cards are per declared fabric, not per render row — coverage is claimed by the fabrics list, so a fabric with no render gets a card that says so, and a render row on an undeclared fabric stops the gate as unreadable before the join is judged. And the package's own conformance stays the component gate's word: this gate reads only the manifest's identity, digest, and bindings, so the two gates compose (#101 then #102) without either pretending to own the other's judgment.
 
 ## License
 

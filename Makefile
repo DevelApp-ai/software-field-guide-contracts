@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the twelve wasm bundles into build/wasm/
+#   make build         compile the thirteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -62,6 +62,12 @@
 #                      [COMPONENT_PACKAGE=... COMPONENT_REGISTRY=...] [TODAY=...]
 #   make component-demo the done-when proof: an unregistered package caught
 #                      citing both files (runs the whole demo)
+#   make check-matrix  validate the render matrix (the fabrics it covers and
+#                      their rendered copies of the package) [MATRIX=...]
+#   make matrix-gate  gate every fabric's render against the component
+#                      package manifest [COMPONENT_PACKAGE=... MATRIX=...]
+#   make matrix-demo  the done-when proof: one fabric quietly running a
+#                      different release caught citing both files
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -99,6 +105,7 @@ CITIZEN_SPEC ?= examples/citizen/spec.yaml
 CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
 COMPONENT_PACKAGE ?= examples/component/package.yaml
 COMPONENT_REGISTRY ?= examples/component/registry.yaml
+MATRIX ?= examples/matrix/matrix.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -111,6 +118,7 @@ COMPONENT_REGISTRY ?= examples/component/registry.yaml
 	check-ingress ingress-gate ingress-demo \
 	check-citizen citizen-gate citizen-demo \
 	check-component component-gate component-demo \
+	check-matrix matrix-gate matrix-demo \
 	examples ci
 
 fmt:
@@ -161,6 +169,9 @@ build:
 	$(OPA) build -t wasm -e component/audit -o build/component.tar.gz policies
 	tar -xzf build/component.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/component.wasm
+	$(OPA) build -t wasm -e matrix/audit -o build/matrix.tar.gz policies
+	tar -xzf build/matrix.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/matrix.wasm
 
 site: build
 	rm -rf site-build
@@ -1007,6 +1018,142 @@ component-demo:
 	@echo "caught as expected: gate/package-unregistered — a package the estate never admitted is a package the estate never vouched for"
 	@echo "--- component demo: all done-when proofs passed ---"
 
+# Validate the render matrix alone: one component package's rendered
+# copies, fabric by fabric — the fabrics it must cover, and each
+# fabric's version, pinned digest, and the policy bindings in force.
+# Conformance gate, not advisor: any finding fails.
+check-matrix:
+	@test -f "$(MATRIX)" || { echo "usage: make check-matrix [MATRIX=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(MATRIX)' \
+		| jq -cs --arg today "$(TODAY)" --arg matrixFile "$(MATRIX)" '{matrix: .[0], today: $$today, matrixFile: $$matrixFile}' \
+		| $(OPA) eval -d policies -I 'data.matrix.validate' --format=pretty | tee build/check-matrix.json
+	@jq -e '.valid == true' build/check-matrix.json > /dev/null \
+		|| { echo "check-matrix: the render matrix is not in conformance — findings above"; exit 1; }
+
+# Gate every fabric's render against the component package manifest —
+# the same version, the same pinned digest, and the same policy
+# bindings, on every declared fabric. Conformance gate, not advisor:
+# a render for another component, a fabric with no render, a version
+# or digest disagreement, and a binding disagreement in either
+# direction are all refused, not advised.
+matrix-gate:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make matrix-gate [COMPONENT_PACKAGE=... MATRIX=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' '$(MATRIX)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" --arg matrixFile "$(MATRIX)" \
+			'{package: .[0], matrix: .[1], today: $$today, packageFile: $$packageFile, matrixFile: $$matrixFile}' \
+		| $(OPA) eval -d policies -I 'data.matrix.gate' --format=pretty | tee build/matrix-gate.json
+	@jq -e '.valid == true' build/matrix-gate.json > /dev/null \
+		|| { echo "matrix-gate: the fabric renders are not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #102: the render-matrix
+# conformance gate refuses. Runs the control matrix end to end,
+# then proves every drift variant bites with its named rule — six
+# at the join, one at validation, one at the fabric list — and
+# that each bite renders its verdict honestly.
+matrix-demo:
+	@echo "--- 1. the render matrix validates ---"
+	@$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/matrix-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/matrix-gate.json; exit 1; }
+	@jq -e '.fabrics | length == 3' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared fabric"; cat build/matrix-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per declared fabric"
+	@echo "--- 3. a fabric on another release is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.version-skew.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-version-skew.txt 2>&1; \
+		then echo "FAIL: the version skew passed the gate"; cat build/matrix-version-skew.txt; exit 1; \
+		else grep -q 'gate/render-version-skew' build/matrix-version-skew.txt \
+			|| { echo "FAIL: the gate failed without the version rule"; cat build/matrix-version-skew.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/render-version-skew — one fabric quietly running a different release"
+	@echo "--- 4. a re-render that swapped the artifact is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.digest-drift.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-digest-drift.txt 2>&1; \
+		then echo "FAIL: the digest drift passed the gate"; cat build/matrix-digest-drift.txt; exit 1; \
+		else grep -q 'gate/render-digest-drift' build/matrix-digest-drift.txt \
+			|| { echo "FAIL: the gate failed without the digest rule"; cat build/matrix-digest-drift.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/render-digest-drift — a digest the package never published"
+	@echo "--- 5. a declared binding two fabrics never ran is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.binding-one-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-binding-one.txt 2>&1; \
+		then echo "FAIL: the missing bindings passed the gate"; cat build/matrix-binding-one.txt; exit 1; \
+		else grep -q 'gate/binding-missing' build/matrix-binding-one.txt \
+			|| { echo "FAIL: the gate failed without the binding rule"; cat build/matrix-binding-one.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 2' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite once per fabric that never ran the policy"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/binding-missing × 2 — a policy the package shipped that two fabrics never ran"
+	@echo "--- 6. a binding the package never declared is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.extra-binding.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-extra-binding.txt 2>&1; \
+		then echo "FAIL: the undeclared binding passed the gate"; cat build/matrix-extra-binding.txt; exit 1; \
+		else grep -q 'gate/binding-undeclared' build/matrix-extra-binding.txt \
+			|| { echo "FAIL: the gate failed without the undeclared-binding rule"; cat build/matrix-extra-binding.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/binding-undeclared — a policy in force the package never shipped"
+	@echo "--- 7. a fabric with no render at all is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.fabric-unrendered.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-unrendered.txt 2>&1; \
+		then echo "FAIL: the unrendered fabric passed the gate"; cat build/matrix-unrendered.txt; exit 1; \
+		else grep -q 'gate/fabric-unrendered' build/matrix-unrendered.txt \
+			|| { echo "FAIL: the gate failed without the coverage rule"; cat build/matrix-unrendered.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/fabric-unrendered — coverage claimed and never delivered"
+	@echo "--- 8. a matrix for another component is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.wrong-component.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-wrong-component.txt 2>&1; \
+		then echo "FAIL: the other component passed the gate"; cat build/matrix-wrong-component.txt; exit 1; \
+		else grep -q 'gate/component-mismatch' build/matrix-wrong-component.txt \
+			|| { echo "FAIL: the gate failed without the component rule"; cat build/matrix-wrong-component.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/component-mismatch — renders judged against somebody else's package"
+	@echo "--- 9. a matrix nobody re-reads is caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-matrix MATRIX=examples/matrix/broken/matrix.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-stale-review.txt 2>&1; \
+		then echo "FAIL: the stale review passed validation"; cat build/matrix-stale-review.txt; exit 1; \
+		else grep -q 'matrix/reviewed-stale' build/matrix-stale-review.txt \
+			|| { echo "FAIL: the validator failed without the staleness rule"; cat build/matrix-stale-review.txt; exit 1; }; \
+		fi
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-stale-gate.txt 2>&1; \
+		then echo "FAIL: the stale review passed the gate"; cat build/matrix-stale-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/matrix-stale-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/matrix-stale-gate.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: matrix/reviewed-stale, verdict unreadable — a question the gate refuses to answer on stale inputs"
+	@echo "--- 10. a render on a fabric the matrix never declared is caught at validation ---"
+	@if $(MAKE) check-matrix MATRIX=examples/matrix/broken/matrix.undeclared-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-undeclared-fabric.txt 2>&1; \
+		then echo "FAIL: the undeclared fabric passed validation"; cat build/matrix-undeclared-fabric.txt; exit 1; \
+		else grep -q 'render/fabric-undeclared' build/matrix-undeclared-fabric.txt \
+			|| { echo "FAIL: the validator failed without the declared-fabric rule"; cat build/matrix-undeclared-fabric.txt; exit 1; }; \
+		fi
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.undeclared-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-undeclared-gate.txt 2>&1; \
+		then echo "FAIL: the undeclared fabric passed the gate"; cat build/matrix-undeclared-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/matrix-undeclared-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/matrix-undeclared-gate.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree"
+	@echo "--- matrix demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -1031,7 +1178,9 @@ examples:
 	$(MAKE) citizen-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-component TODAY=$(ANCHOR_TODAY)
 	$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
+	$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo
 	$(OPA) fmt --fail -l policies

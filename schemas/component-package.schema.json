@@ -2,7 +2,7 @@
 	"$schema": "http://json-schema.org/draft-07/schema#",
 	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/component-package.schema.json",
 	"title": "Component package manifest",
-	"description": "The component package manifest, as defined in The Software Field Guide, issue #101: the component-package chapter's YAML — the package as data. The manifest declares the package's name, version, and tier, the sha256 artifact digest it publishes, the signature and attestation recorded over that digest, its provenance, and the dependencies it pins by digest. Judged at the package gate against the component registry, as a conformance gate — not an advisor: an unregistered package, an artifact drifted from its registration, an unresolved dependency, a stale pin, and a customer-tier package depending downward are all refused. The validator is honest about what it models: it checks the evidence facts are recorded and internally consistent (the signed digest equals the artifact digest, the pins equal the registry's digests), not that signatures are cryptographically valid. This schema mirrors the shape rules of the Rego validator (policies/component); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, the signedDigest equal to the artifactDigest, no duplicate dependencies, a general-tier package declaring no dependencies, and the five drifts judged at the join.",
+	"description": "The component package manifest, as defined in The Software Field Guide, issue #101: the component-package chapter's YAML — the package as data. The manifest declares the package's name, version, and tier, the sha256 artifact digest it publishes, the signature and attestation recorded over that digest, its provenance, the dependencies it pins by digest, and the policy bindings it ships (the render-matrix gate's join field, book issue #102). Judged at the package gate against the component registry, as a conformance gate — not an advisor: an unregistered package, an artifact drifted from its registration, an unresolved dependency, a stale pin, and a customer-tier package depending downward are all refused. The validator is honest about what it models: it checks the evidence facts are recorded and internally consistent (the signed digest equals the artifact digest, the pins equal the registry's digests), not that signatures are cryptographically valid. This schema mirrors the shape rules of the Rego validator (policies/component); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, the signedDigest equal to the artifactDigest, no duplicate dependencies, a general-tier package declaring no dependencies, and the five drifts judged at the join.",
 	"type": "object",
 	"required": ["component", "version", "hierarchy", "reviewedOn", "owner", "artifactDigest", "signature", "attestation", "provenance", "dependencies"],
 	"additionalProperties": true,
@@ -108,6 +108,27 @@
 						"type": "string",
 						"pattern": "^[a-f0-9]{64}$",
 						"description": "The digest the package pins the dependency at. The gate requires the registry to carry the package at exactly this digest."
+					}
+				}
+			}
+		},
+		"policyBindings": {
+			"type": "array",
+			"description": "The policy bindings the package ships: the policies that must be in force wherever the component renders, each bound to the exact path it renders from. The render-matrix gate's join field (book issue #102) — every fabric's rendered copy of the package is judged against these, as pairs. Absent, the package declares none.",
+			"items": {
+				"type": "object",
+				"required": ["policy", "path"],
+				"additionalProperties": true,
+				"properties": {
+					"policy": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The policy that must be in force, by name."
+					},
+					"path": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The exact path the policy renders from. A path disagreement is a binding disagreement — the render-matrix gate compares the pair."
 					}
 				}
 			}

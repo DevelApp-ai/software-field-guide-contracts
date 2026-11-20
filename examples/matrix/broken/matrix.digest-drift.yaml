@@ -1,0 +1,42 @@
+# Broken variant: digest mismatch against the package manifest —
+# book issue #102.
+#
+# A digest mismatch that appears after a re-render: onprem-vsphere
+# re-rendered and now carries a digest the package manifest
+# (examples/component/package.yaml) never published. The gate
+# refuses with gate/render-digest-drift, citing the fabric and both
+# digests.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+component: payments-checkout
+
+fabrics:
+  - azure-west-europe
+  - aws-eu-central
+  - onprem-vsphere
+
+renders:
+  - fabric: azure-west-europe
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  - fabric: aws-eu-central
+    version: 1.4.0
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}
+
+  # The drift: the hand-edited re-render swapped the artifact out
+  # from under the digest.
+  - fabric: onprem-vsphere
+    version: 1.4.0
+    digest: 4ea0ac5c92c4939f8902c75406b4f583942f922272cfc7b94eac70abdab97e80
+    bindings:
+      - {policy: pci-scan, path: /policies/pci-scan.rego}
+      - {policy: tier-egress, path: /policies/tier-egress.rego}

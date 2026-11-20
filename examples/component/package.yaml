@@ -58,3 +58,15 @@ provenance:
 dependencies:
   - package: platform-baseline
     digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+
+# The policy bindings the package ships: the policies that must be
+# in force wherever the component renders, each bound to the exact
+# path it renders from. The render-matrix gate (book issue #102)
+# judges every fabric's rendered copy of the package against these —
+# a binding missing from one fabric is a policy that fabric never
+# ran. Absent, the package declares none.
+policyBindings:
+  - policy: pci-scan
+    path: /policies/pci-scan.rego
+  - policy: tier-egress
+    path: /policies/tier-egress.rego
