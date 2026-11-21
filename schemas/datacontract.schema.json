@@ -1,0 +1,149 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/datacontract.schema.json",
+	"title": "Data contract",
+	"description": "The data contract, as defined in The Software Field Guide, issue #106: the enforceable-data-contracts chapter's YAML — the dataset's promises as data. The contract declares the schema the dataset is bound to, the freshness SLA its consumers may rely on, the quality thresholds it must not fall below, the owner who answers for it, the consumers who rely on it, the named checks that enforce it in CI, and the change methodology that governs its evolution. The validator is honest about what it models: it checks the contract's own completeness — every clause present, internally consistent, and datable — not that enforcement actually ran while CI was trusted, and not that the schema matches the data; those answers live in the pipelines and the schema checks, not in policy. This schema mirrors the shape rules of the Rego validator (policies/datacontract); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, a freshness SLA that is a positive number, one bound per quality metric, no duplicate consumers or checks, the expand-migrate-contract methodology, and the joins judged at the gate against the enforcement record.",
+	"type": "object",
+	"required": ["dataset", "version", "reviewedOn", "owner", "schema", "freshness", "quality", "consumers", "enforcement", "changes"],
+	"additionalProperties": true,
+	"properties": {
+		"dataset": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The dataset the contract governs. The enforcement record answers for this dataset and no other — the dataset is the join key the contract is judged against."
+		},
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the contract. An unversioned contract is a contract nobody can pin a change against."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the contract was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the dataset and answers for the contract. A contract with an owner and a review cadence is the discipline."
+		},
+		"schema": {
+			"type": "object",
+			"description": "The machine-checkable schema the dataset is bound to. A contract without its schema is a promise about data nobody can check.",
+			"required": ["ref", "subject"],
+			"additionalProperties": true,
+			"properties": {
+				"ref": {
+					"type": "string",
+					"minLength": 1,
+					"description": "The schema's reference — its path or identifier. Field names and types that live nowhere check nothing."
+				},
+				"subject": {
+					"type": "string",
+					"minLength": 1,
+					"description": "What one record of the dataset is. A schema that does not name its subject is a shape in search of data."
+				}
+			}
+		},
+		"freshness": {
+			"type": "object",
+			"description": "The freshness clause: how stale the dataset may be before the contract is breached. A dataset that is arbitrarily stale has breached no promise, because it made none.",
+			"required": ["slaHours"],
+			"additionalProperties": true,
+			"properties": {
+				"slaHours": {
+					"type": "number",
+					"exclusiveMinimum": 0,
+					"description": "The freshness SLA, in hours. A freshness clause without an SLA is a promise of freshness with no number to breach — and a zero-hour SLA is no SLA at all."
+				}
+			}
+		},
+		"quality": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The quality thresholds the dataset must not fall below, one row per metric, bounded exactly one way. Quality nobody promised is quality nobody has to keep.",
+			"items": {
+				"type": "object",
+				"required": ["metric"],
+				"additionalProperties": true,
+				"properties": {
+					"metric": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The metric the threshold bounds. One metric, one row."
+					},
+					"min": {
+						"type": "number",
+						"description": "The floor the metric must not fall below. Exactly one of min and max; a row with both bounds is a promise nobody can read."
+					},
+					"max": {
+						"type": "number",
+						"description": "The ceiling the metric must not rise above. Exactly one of min and max."
+					}
+				}
+			}
+		},
+		"consumers": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The consumers who rely on the dataset, each named with the use they put it to. A contract with no named consumer is a promise made to nobody — and a deprecation window negotiated with no one.",
+			"items": {
+				"type": "object",
+				"required": ["name", "use"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The consumer's name. A consumer with no name is nobody to warn before the schema breaks them."
+					},
+					"use": {
+						"type": "string",
+						"minLength": 1,
+						"description": "What the consumer uses the dataset for. The use names which clause their breakage will breach."
+					}
+				}
+			}
+		},
+		"enforcement": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The named checks that enforce the contract in CI — evidence of enforcement is the contract's own clause. An unenforced contract is a promise nobody keeps; the gate joins these names against the enforcement record's run rows.",
+			"items": {
+				"type": "object",
+				"required": ["check", "pipeline"],
+				"additionalProperties": true,
+				"properties": {
+					"check": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The check's name. The enforcement record answers for checks by name, so a check the record never shows running is a clause with no teeth."
+					},
+					"pipeline": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The pipeline that runs the check. A check that runs nowhere is not evidence of enforcement."
+					}
+				}
+			}
+		},
+		"changes": {
+			"type": "object",
+			"description": "The change methodology that governs the contract's evolution, per the evolving-data-schemas sibling chapter. How the dataset evolves is part of the promise, not an afterthought.",
+			"required": ["methodology", "deprecationWindowDays"],
+			"additionalProperties": true,
+			"properties": {
+				"methodology": {
+					"type": "string",
+					"enum": ["expand-migrate-contract"],
+					"description": "The change discipline: additive changes land on the same version, breaking changes ship as a new version side by side, and the old one is dropped in its own late, reviewed change. Consumers negotiate against a discipline, not against hope."
+				},
+				"deprecationWindowDays": {
+					"type": "number",
+					"exclusiveMinimum": 0,
+					"description": "The deprecation window, in days. Windows are measured, not calendared — a zero-day window is a breaking change wearing yesterday's date."
+				}
+			}
+		}
+	}
+}

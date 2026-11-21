@@ -1,0 +1,42 @@
+# Data contract enforcement record — The Software Field Guide,
+# issue #106.
+#
+# The CI's word: the checks it actually ran for one dataset, and
+# the day each ran. The conformance gate joins this record against
+# the data contract (datacontract.yaml) — a conformance gate, not
+# an advisor: evidence for a dataset the contract never names, a
+# declared check the record never shows running, and evidence for
+# a check the contract never declared are all refused. The
+# validator is honest about what it models: it checks that the
+# evidence facts are recorded and datable — not that the runs
+# succeeded or that the numbers they checked were good; those
+# answers live in the pipelines themselves, not in policy.
+#
+# BROKEN VARIANT — the record shows a run of settlement-replay, a
+# check the contract never declared: run rows the contract cannot
+# vouch for are logs, not enforcement. The gate refuses:
+# gate/check-undeclared, verdict drifts. Bites exactly once at the
+# join.
+#
+# The record is seeded, after the chapter's worked example: the
+# data contract CI's word for the payments team's settlement
+# dataset — plus one run the contract cannot vouch for. Example
+# dates are chosen relative to the CI anchor date 2026-10-20.
+
+dataset: payments.settlements
+version: 1
+reviewedOn: 2026-10-19
+owner: Payments team
+
+# The checks the CI ran, one row per check, with the day each
+# ran. The gate requires a row for every check the contract
+# declares, and refuses a row for any check it never did.
+runs:
+  - check: schema-conformance
+    ranOn: 2026-10-20
+  - check: freshness-lag
+    ranOn: 2026-10-20
+  - check: quality-thresholds
+    ranOn: 2026-10-19
+  - check: settlement-replay
+    ranOn: 2026-10-19
