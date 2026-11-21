@@ -22,6 +22,8 @@ And it implements the **component package conformance validator** from [book iss
 
 And it implements the **render-matrix consistency gate** from [book issue #102](https://github.com/DevelApp-ai/software-field-guide/issues/102): one component package, rendered to N fabrics — and a gate that proves every fabric renders the manifest's version, its pinned digest, and every policy binding it declares, no fabric quietly running a different release and no fabric enforcing a policy the package never shipped. A component is not deployed until every declared fabric agrees.
 
+And it implements the **component lifecycle evidence gate** from [book issue #105](https://github.com/DevelApp-ai/software-field-guide/issues/105): the component's paper trail as data — versioned transitions, each carrying the evidence its type demands (the bake's sha256 image digest, the patch's provenance source and commit, the upgrade's rehearsed rollback) — judged against the component package manifest, joined by name. A bake without its digest, a patch nobody authored, an upgrade nobody rehearsed the way back for, a transition the record's review never saw, a record nobody has re-read in a year, and a trail answering for somebody else's component: all refused. A transition recorded once and never refreshed is a question, not a fact.
+
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -61,10 +63,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `matrix/validate` | one render matrix alone | `{"matrix": {...}, "today": "YYYY-MM-DD"}` |
 | `matrix/gate` | the fabric renders against the component package manifest | `{"package": {...}, "matrix": {...}, "today": "YYYY-MM-DD"}` |
 | `matrix/audit` | all of it at once — one verdict, the fabric cards | the superset of the above |
+| `lifecycle/validate` | one component lifecycle record alone | `{"lifecycle": {...}, "today": "YYYY-MM-DD"}` |
+| `lifecycle/gate` | the lifecycle record against the component package manifest | `{"lifecycle": {...}, "package": {...}, "today": "YYYY-MM-DD"}` |
+| `lifecycle/audit` | all of it at once — one verdict, the transition cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v1.0** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, the component package conformance validator, and the render-matrix consistency gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v1.1** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, the component package conformance validator, the render-matrix consistency gate, and the component lifecycle evidence gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -843,6 +848,67 @@ make matrix-demo
 #      caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree
 ```
 
+## The component lifecycle evidence gate
+
+The lifecycle-evidence chapter's YAML joins two documents the component validators already know. The **component lifecycle record** is a component's paper trail: the versioned transitions that produced what runs — the `bake` that produced the image, the `patch` folded in, the `upgrade` with its rehearsed way back — each carrying the evidence its type demands (a bake its sha256 image digest, a patch its provenance source and commit, an upgrade the date its rollback was rehearsed). The **component package manifest** from #101 contributes only the component name: the join, and with it the package's own conformance, stays that gate's word. The gate is honest about what it models: evidence *recorded and internally datable*, not evidence *true* — a rehearsed rollback is a recorded fact about the calendar, not proof the rollback would work; that honest limit is stated in the findings and below. The verdict ladder separates the failures the same way as the sibling gates: `unreadable` (a record or transition the gate cannot trust), `drifts` (the join found the record answering for somebody else's component), `consistent`.
+
+```yaml
+# lifecycle.yaml — one component's trail, every transition carrying its evidence
+version: 1
+reviewedOn: 2026-10-18
+owner: Payments team
+component: payments-checkout      # the join runs on this name
+
+transitions:
+  - type: bake                    # the image that produced release 1.4.0, pinned
+    recordedOn: 2026-09-30
+    imageDigest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+
+  - type: patch                   # the fix folded in, with where it came from
+    recordedOn: 2026-10-08
+    provenance:
+      source: payments/checkout.git
+      commit: 9f31c0e
+
+  - type: upgrade                 # the way forward, with its rehearsed way back
+    recordedOn: 2026-10-15
+    rollback:
+      rehearsedOn: 2026-10-14
+```
+
+### What the gate enforces and proofs
+
+- **Loud validation of the record** (`lifecycle/validate`): the shapes — a version and a fresh review stamp (`lifecycle/version-required`, `lifecycle/reviewed-stale`, `lifecycle/reviewed-in-future`), the owner and component recorded (`lifecycle/owner-required`, `lifecycle/component-required`), transitions present, well-formed rows with a known type and a real date (`transition/type-unknown`, `transition/recorded-on-required`, `transition/recorded-on-invalid`), and the review covering every transition (`transition/recorded-after-review`: a fact recorded after the review that nominally vouches for it is a fact nobody re-checked).
+- **Evidence by type** (`lifecycle/validate`): per-type evidence completeness is part of row well-formedness — a bake without a real sha256 image digest (`transition/bake-digest-required`), a patch without a provenance source and commit (`transition/patch-provenance-required`), an upgrade without a rehearsed rollback (`transition/upgrade-rollback-required`). The record's claim is dated, not vouched for: the gate models evidence recorded and internally datable, not that the images were scanned or that the rollback would work.
+- **Freshness is two clocks** (`lifecycle/validate`): the 365-day review clock (`lifecycle/reviewed-stale` — a trail nobody has re-read in a year), plus coverage — the review must be fresh *and* see every transition, so a transition sneaked in after the review bites even on a recently reviewed record.
+- **The package preconditions** (`lifecycle/gate`): the manifest must be readable before the join is asked — the same component-name rules the component gate owns (`package/missing`, `component/name-required`). The package's own conformance remains the component gate's word; this gate reads only the name.
+- **The one named drift** (`lifecycle/gate`, severity `error` — verdict `drifts`): a record for a component the manifest never packaged (`gate/component-mismatch`, citing both files).
+- **The unreadable tier** (severity `error` — verdict `unreadable`): a record or transition the gate cannot read stops the gate before the join is judged; a stale review stamp and evidence-free transitions are both questions the gate refuses to answer on inputs it cannot trust.
+- **One audit** (`lifecycle/audit`): the composed entrypoint for CI and the playground — one verdict and the transition cards alongside: one card per recorded transition (evidence-complete rows only), each `consistent` or `drifts`, with the finding that resolved it.
+
+The done-when proof from issue #105 runs as a single target:
+
+```sh
+make lifecycle-demo
+# → 1. the lifecycle record validates
+#   2. the control passes the gate and renders consistent
+#      control verdict: consistent — one card per recorded transition, every one evidenced
+#   3. a bake without its image digest is caught:
+#      caught as expected: transition/bake-digest-required — an image nobody can pin to what actually runs
+#   4. a patch with no provenance is caught:
+#      caught as expected: transition/patch-provenance-required — a change nobody authored
+#   5. an upgrade nobody rehearsed the rollback for is caught:
+#      caught as expected: transition/upgrade-rollback-required — a way back nobody walked
+#   6. a transition the review never saw is caught:
+#      caught as expected: transition/recorded-after-review — a fact nobody re-checked
+#   7. a transition whose type the gate cannot vouch for is caught:
+#      caught as expected: transition/type-unknown — a fact this gate cannot judge
+#   8. a record nobody has re-read in two years is caught:
+#      caught as expected: lifecycle/reviewed-stale, verdict unreadable — a trail nobody still believes
+#   9. a record for a component the manifest never packaged is caught at the join:
+#      caught as expected: gate/component-mismatch — a paper trail answering for somebody else's component
+```
+
 ## Command line
 
 Requirements: [OPA](https://www.openpolicyagent.org/docs/) v1.21+, [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/).
@@ -871,6 +937,8 @@ make check-component TODAY=2026-10-20         # the component package manifest a
 make component-gate TODAY=2026-10-20          # the component registry against the manifest
 make check-matrix TODAY=2026-10-20            # the render matrix alone
 make matrix-gate TODAY=2026-10-20             # the fabric renders against the package manifest
+make check-lifecycle TODAY=2026-10-20        # the lifecycle record alone
+make lifecycle-gate TODAY=2026-10-20         # the lifecycle record against the package manifest
 ```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
@@ -881,7 +949,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed. The **Matrix gate** tab gates every fabric's rendered copy of the package against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the fabric cards: one per declared fabric, because the renders are not believed until every fabric agrees.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed. The **Matrix gate** tab gates every fabric's rendered copy of the package against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the fabric cards: one per declared fabric, because the renders are not believed until every fabric agrees. The **Lifecycle gate** tab gates the component's lifecycle record against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the transition cards: one per recorded transition, because a transition is not believed until its evidence vouches for it.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -902,7 +970,8 @@ policies/ingress/   lib, model, policy, gate, audit
 policies/citizen/  lib, model, policy, gate, audit
 policies/component/ lib, model, policy, gate, audit
 policies/matrix/    lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component + matrix)
+policies/lifecycle/ lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component + matrix + lifecycle)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
@@ -913,12 +982,14 @@ examples/           valid YAML contracts, a bundle, an authz policy set, the act
                     and the citizen demo (app manifest + spec + guardrail registry, plus broken variants),
                     and the component demo (package manifest + component registry, plus broken variants),
                     and the render-matrix demo (package manifest with policy bindings + the
-                    fabric render matrix, plus broken variants)
+                    fabric render matrix, plus broken variants), and the lifecycle demo
+                    (a component lifecycle record against the package manifest, plus
+                    broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-*/matrix-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, matrix demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-*/matrix-*/lifecycle-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, matrix demo, lifecycle demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -928,7 +999,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the thirteen `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the fourteen `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
@@ -938,6 +1009,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **Posture is data, and a kill path is rehearsed or it is a hope.** The ingress case records the edge's posture as checkable facts — the zone that contains every wildcard, the default-deny that keeps the allow list an allow list, the rotation clocks on the certificates, the pagers behind the SLOs, the audit coverage of the route classes — and the gate joins the drill record to it, because a kill path declared but never rehearsed is a lever nobody has proven they can pull. Rehearsal staleness is a warning, not an error: a kill path rehearsed once and never again is a question, not an incident. The composed audit dedupes the shared conditions, so the same broken case reports once, whichever lens caught it.
 - **A package is admitted or it does not ship.** The component gate is the conformance mirror of the citizen's advisor: judged at the package's own release gate against a registry the estate owns — an unregistered package, an artifact drifted from its registered digest, an unresolved dependency, a stale pin, and a downward tier all refused, because the estate vouches for what it ships and nothing else. Keeping manifest and registry as two documents means the same registry backs many packages and every package is re-judged when the registry changes — the tiers are the registry's word, not the package's. The verdict ladder dedupes the shared conditions honestly: `unreadable` means a document could not be read, `drifts` means the join found drift — and a drifted artifact re-signed over its drift bites twice, the signature failing before the drift is judged. And the gate says what it models: it checks that the evidence facts are recorded and internally consistent, not that signatures are cryptographically valid — the key ceremony is outside what a policy can check.
 - **One component, N fabrics, one word.** The render-matrix gate is the segment pattern (#80) generalized from network rules to component packages: the package manifest declares what every fabric must render — the version, the pinned digest, and the policy bindings, as policy+path pairs — and the matrix is the estate's word on what each fabric actually rendered. The join runs both ways, like the segment gate's: a declared binding a fabric never ran drifts silently, and a binding in force the package never declared drifts just as silently. Every join finding cites the fabric and the divergent field plus both files, because a mismatch without its documents is a mystery, not a finding. The cards are per declared fabric, not per render row — coverage is claimed by the fabrics list, so a fabric with no render gets a card that says so, and a render row on an undeclared fabric stops the gate as unreadable before the join is judged. And the package's own conformance stays the component gate's word: this gate reads only the manifest's identity, digest, and bindings, so the two gates compose (#101 then #102) without either pretending to own the other's judgment.
+- **A transition is not believed until its evidence vouches for it.** The lifecycle gate is the same shape as the sibling gates pointed at the fourth dimension, time: every transition names its type and carries the evidence that type demands — a bake its sha256 image digest, a patch its provenance source and commit, an upgrade the date its rollback was rehearsed — and freshness is two clocks: the 365-day review clock, plus the review covering every transition, so a fact sneaked in after the review bites on a record that otherwise looks fresh. The gate is honest about what that evidence is: recorded and internally datable, not proven true — a rehearsed rollback is a fact about the calendar, not a fact about the rollback. The join is deliberately one rule: the record must answer for the manifest's component (`gate/component-mismatch`), and the package's own conformance stays the component gate's word — this gate reads only the manifest's component name, so the gates compose (#101 then #105) without either pretending to own the other's judgment.
 
 ## License
 
