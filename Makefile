@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the fourteen wasm bundles into build/wasm/
+#   make build         compile the fifteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -76,6 +76,15 @@
 #   make policy-demo  the done-when proof: a package binding to a
 #                      policy the catalog never declared caught
 #                      citing both files (runs the whole demo)
+#   make check-compliance  validate the controls manifest (the named
+#                      evidence sources and the controls that cite
+#                      them) [CONTROLS=...] [TODAY=YYYY-MM-DD]
+#   make compliance-gate  gate the requirements catalog against the
+#                      controls manifest [CONTROLS=... REQUIREMENTS=...]
+#                      [TODAY=YYYY-MM-DD]
+#   make compliance-demo  the done-when proof: a requirement nobody
+#                      controls caught citing both files (runs the
+#                      whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -116,6 +125,8 @@ COMPONENT_REGISTRY ?= examples/component/registry.yaml
 MATRIX ?= examples/matrix/matrix.yaml
 POLICY_CATALOG ?= examples/policy/catalog.yaml
 POLICY_PACKAGE ?= examples/component/package.yaml
+CONTROLS ?= examples/compliance/controls.yaml
+REQUIREMENTS ?= examples/compliance/requirements.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -130,6 +141,7 @@ POLICY_PACKAGE ?= examples/component/package.yaml
 	check-component component-gate component-demo \
 	check-matrix matrix-gate matrix-demo \
 	check-policy policy-gate policy-demo \
+	check-compliance compliance-gate compliance-demo \
 	examples ci
 
 fmt:
@@ -186,6 +198,9 @@ build:
 	$(OPA) build -t wasm -e policy/audit -o build/policy.tar.gz policies
 	tar -xzf build/policy.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/policy.wasm
+	$(OPA) build -t wasm -e compliance/audit -o build/compliance.tar.gz policies
+	tar -xzf build/compliance.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/compliance.wasm
 
 site: build
 	rm -rf site-build
@@ -1273,6 +1288,136 @@ policy-demo:
 	@echo "--- policy demo: all done-when proofs passed ---"
 
 
+# Validate the controls manifest alone: the compliance chapter's
+# manifest — the estate's own word, the named evidence sources it
+# collects and every control's mappings, citations, and review
+# clocks. Conformance gate, not advisor: any finding fails.
+check-compliance:
+	@test -f "$(CONTROLS)" || { echo "usage: make check-compliance [CONTROLS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTROLS)' \
+		| jq -cs --arg today "$(TODAY)" --arg controlsFile "$(CONTROLS)" '{controls: .[0], today: $$today, controlsFile: $$controlsFile}' \
+		| $(OPA) eval -d policies -I 'data.compliance.validate' --format=pretty | tee build/check-compliance.json
+	@jq -e '.valid == true' build/check-compliance.json > /dev/null \
+		|| { echo "check-compliance: the controls manifest is not in conformance — findings above"; exit 1; }
+
+# Gate the requirements catalog against the controls manifest: every
+# catalog requirement must have a control mapped onto it, every
+# control must map onto a declared requirement, every citation must
+# resolve to a live evidence source, and every review clock must be
+# fresh against today. Conformance gate, not advisor: a requirement
+# nobody controls, a control citing a requirement nobody wrote, dead
+# evidence, and a lapsed clock are all refused.
+compliance-gate:
+	@test -f "$(CONTROLS)" || test -f "$(REQUIREMENTS)" || { echo "usage: make compliance-gate [CONTROLS=... REQUIREMENTS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTROLS)' '$(REQUIREMENTS)' \
+		| jq -cs --arg today "$(TODAY)" --arg controlsFile "$(CONTROLS)" --arg requirementsFile "$(REQUIREMENTS)" \
+			'{controls: .[0], requirements: .[1], today: $$today, controlsFile: $$controlsFile, requirementsFile: $$requirementsFile}' \
+		| $(OPA) eval -d policies -I 'data.compliance.gate' --format=pretty | tee build/compliance-gate.json
+	@jq -e '.valid == true' build/compliance-gate.json > /dev/null \
+		|| { echo "compliance-gate: the requirements catalog is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #107: the compliance
+# controls-as-data gate refuses. Runs the control pair end to end,
+# then proves every drift variant bites — the unmapped requirement,
+# the dead evidence, the lapsed clock, the unknown requirement — and
+# that the unreadable variants refuse to answer, each naming its rule.
+compliance-demo:
+	@echo "--- 1. the controls manifest validates ---"
+	@$(MAKE) check-compliance TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control pair passes the gate and renders consistent ---"
+	@$(MAKE) compliance-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/compliance-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/compliance-gate.json; exit 1; }
+	@jq -e '.requirements | length == 4' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared requirement"; cat build/compliance-gate.json; exit 1; }
+	@echo "control verdict: consistent — every requirement covered by a sound control, one card per declaration"
+	@echo "--- 3. a requirement nobody controls is caught at the join ---"
+	@if $(MAKE) compliance-gate REQUIREMENTS=examples/compliance/broken/requirements.unmapped.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-unmapped.txt 2>&1; \
+		then echo "FAIL: the unmapped requirement passed the gate"; cat build/compliance-unmapped.txt; exit 1; \
+		else grep -q 'gate/requirement-unmapped' build/compliance-unmapped.txt \
+			|| { echo "FAIL: the gate failed without the unmapped rule"; cat build/compliance-unmapped.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/requirement-unmapped — a requirement nobody controls is a promise nobody keeps"
+	@echo "--- 4. a control citing retired evidence is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.evidence-dead.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-evidence-dead.txt 2>&1; \
+		then echo "FAIL: the retired evidence passed the gate"; cat build/compliance-evidence-dead.txt; exit 1; \
+		else grep -q 'gate/evidence-dead' build/compliance-evidence-dead.txt \
+			|| { echo "FAIL: the gate failed without the evidence-dead rule"; cat build/compliance-evidence-dead.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/evidence-dead — a control pointing at evidence nobody collects is a control nobody can audit"
+	@echo "--- 5. a control whose review clock lapsed is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.review-expired.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-review-expired.txt 2>&1; \
+		then echo "FAIL: the lapsed clock passed the gate"; cat build/compliance-review-expired.txt; exit 1; \
+		else grep -q 'gate/review-expired' build/compliance-review-expired.txt \
+			|| { echo "FAIL: the gate failed without the review-expired rule"; cat build/compliance-review-expired.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/review-expired — a control nobody re-reviews is a control nobody operates"
+	@echo "--- 6. a control mapping onto a requirement nobody wrote is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.requirement-unknown.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-requirement-unknown.txt 2>&1; \
+		then echo "FAIL: the unknown requirement passed the gate"; cat build/compliance-requirement-unknown.txt; exit 1; \
+		else grep -q 'gate/requirement-unknown' build/compliance-requirement-unknown.txt \
+			|| { echo "FAIL: the gate failed without the requirement-unknown rule"; cat build/compliance-requirement-unknown.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 2' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite honestly twice — the unknown requirement and the requirement it orphaned"; cat build/compliance-gate.json; exit 1; }
+	@grep -q 'gate/requirement-unmapped' build/compliance-requirement-unknown.txt \
+		|| { echo "FAIL: the orphaned requirement went unreported"; cat build/compliance-requirement-unknown.txt; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/requirement-unknown — and the requirement it orphaned bites too, honestly"
+	@echo "--- 7. a control without evidence makes the gate refuse to answer ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.no-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-evidence.txt 2>&1; \
+		then echo "FAIL: the evidence-less control passed the gate"; cat build/compliance-no-evidence.txt; exit 1; \
+		else grep -q 'control/evidence-required' build/compliance-no-evidence.txt \
+			|| { echo "FAIL: the gate failed without the evidence rule"; cat build/compliance-no-evidence.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: control/evidence-required, verdict unreadable — a control without evidence is an assertion, not a control"
+	@echo "--- 8. a manifest nobody re-reads makes the gate refuse to answer ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-stale-review.txt 2>&1; \
+		then echo "FAIL: the stale manifest passed the gate"; cat build/compliance-stale-review.txt; exit 1; \
+		else grep -q 'controls/reviewed-stale' build/compliance-stale-review.txt \
+			|| { echo "FAIL: the gate failed without the stale-review rule"; cat build/compliance-stale-review.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: controls/reviewed-stale, verdict unreadable — a manifest nobody refreshed is a map of an estate that no longer exists"
+	@echo "--- 9. two controls sharing one id make the gate refuse to answer ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.duplicate-id.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-duplicate-id.txt 2>&1; \
+		then echo "FAIL: the duplicated id passed the gate"; cat build/compliance-duplicate-id.txt; exit 1; \
+		else grep -q 'control/id-duplicate' build/compliance-duplicate-id.txt \
+			|| { echo "FAIL: the gate failed without the duplicate rule"; cat build/compliance-duplicate-id.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: control/id-duplicate, verdict unreadable — a control declared twice is evidence nobody can count"
+	@echo "--- 10. a control mapping onto nothing makes the gate refuse to answer ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.no-requirements.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-requirements.txt 2>&1; \
+		then echo "FAIL: the unmapped control passed the gate"; cat build/compliance-no-requirements.txt; exit 1; \
+		else grep -q 'control/requirements-required' build/compliance-no-requirements.txt \
+			|| { echo "FAIL: the gate failed without the requirements rule"; cat build/compliance-no-requirements.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: control/requirements-required, verdict unreadable — an unmapped control is busywork with no compliance meaning"
+	@echo "--- compliance demo: all done-when proofs passed ---"
+
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -1301,7 +1446,9 @@ examples:
 	$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-policy TODAY=$(ANCHOR_TODAY)
 	$(MAKE) policy-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-compliance TODAY=$(ANCHOR_TODAY)
+	$(MAKE) compliance-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo
 	$(OPA) fmt --fail -l policies
