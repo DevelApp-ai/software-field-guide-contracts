@@ -1,0 +1,36 @@
+# Broken lifecycle variant: a record nobody has re-read in two years
+#
+# Seeded from examples/lifecycle/lifecycle.yaml by setting every date
+# back two years — the record stays internally coherent (its review
+# still covers every transition on it), it is simply old. The gate
+# reports lifecycle/reviewed-stale once, verdict unreadable:
+# a trail nobody still believes.
+
+version: 1
+reviewedOn: "2024-10-01"
+owner: Payments team
+# The component this record tracks — the join runs on this name.
+component: payments-checkout
+# The versioned transitions, in the order they were recorded. Each
+# row names its type (bake, patch, upgrade) and the date it was
+# recorded on or before the review, and carries the evidence its type
+# demands.
+transitions:
+  # The bake: the image that produced release 1.4.0, pinned by the
+  # same sha256 digest the package manifest publishes.
+  - type: bake
+    recordedOn: "2024-09-02"
+    imageDigest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+  # The patch: the fix folded in after the bake, with its provenance
+  # — where the change came from, and the commit that built it.
+  - type: patch
+    recordedOn: "2024-09-10"
+    provenance:
+      source: payments/checkout.git
+      commit: 9f31c0e
+  # The upgrade: the rollout that replaced the running release,
+  # having rehearsed the way back the day before it was recorded.
+  - type: upgrade
+    recordedOn: "2024-09-28"
+    rollback:
+      rehearsedOn: "2024-09-27"
