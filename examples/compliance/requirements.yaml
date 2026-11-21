@@ -1,0 +1,45 @@
+# Requirements catalog — The Software Field Guide, issue #107.
+#
+# Compliance obligations as data: the catalog declares the
+# requirements the estate must satisfy — each with its id, its
+# title, and its source — and is the join document of the compliance
+# controls-as-data gate (examples/compliance/controls.yaml). The
+# gate joins requirement ids against the controls manifest's
+# mappings in both directions: a requirement id no control maps to
+# is a promise nobody keeps, and a control mapping onto an id the
+# catalog never declared is compliance claimed with words nobody
+# wrote.
+#
+# The catalog is seeded, after the compliance-as-code chapter's
+# worked example: the storefront's PCI DSS pair, its SOC 2
+# obligation, and the GDPR erasure window. The rows are seeded
+# obligations, not captures of a real estate's GRC tool. Example
+# dates are chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-01
+owner: Compliance team
+
+# The requirements: one row per obligation, cited by the controls'
+# requirement mappings.
+requirements:
+  # PCI-DSS-2.2.7 — firewall rules re-approved on a cadence.
+  - id: PCI-DSS-2.2.7
+    title: Firewall and router rule sets are reviewed and re-approved at least every six months
+    source: PCI DSS v4.0
+
+  # PCI-DSS-3.4.1 — cardholder data unreadable at rest.
+  - id: PCI-DSS-3.4.1
+    title: Cardholder data is rendered unreadable wherever it is stored
+    source: PCI DSS v4.0
+
+  # SOC2-CC6.1 — logical access restricted.
+  - id: SOC2-CC6.1
+    title: Logical access to infrastructure is restricted to authorized users
+    source: SOC 2 Type II, CC6.1
+
+  # GDPR-ART-17 — the erasure window the deletion evidence chapter
+  # fulfilled.
+  - id: GDPR-ART-17
+    title: Personal data is erased within thirty days of a verified erasure request
+    source: GDPR art. 17

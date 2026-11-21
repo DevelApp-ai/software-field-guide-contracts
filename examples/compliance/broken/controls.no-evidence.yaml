@@ -1,0 +1,55 @@
+# Broken variant: a control without its evidence source — book issue
+# #107.
+#
+# CTRL-02 carries no evidenceSource: a control without evidence is
+# an assertion, not a control. The validator fails with
+# control/evidence-required and the gate renders the unreadable
+# verdict — a question the gate refuses to answer on an incomplete
+# manifest.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+evidenceSources:
+  - id: edge-firewall-review
+    kind: review record
+    status: live
+  - id: encryption-config-scan
+    kind: scanner output
+    status: live
+  - id: edge-access-logs
+    kind: log store
+    status: live
+  - id: erasure-case-registry
+    kind: case registry
+    status: live
+
+controls:
+  - id: CTRL-01
+    title: Edge firewall rule set reviewed and re-approved quarterly
+    owner: Platform team
+    requirements: [PCI-DSS-2.2.7]
+    evidenceSource: edge-firewall-review
+    reviewedOn: 2026-09-15
+    intervalDays: 180
+  - id: CTRL-02
+    title: Data-at-rest encryption verified by the nightly config scan
+    owner: Storefront team
+    requirements: [PCI-DSS-3.4.1]
+    reviewedOn: 2026-10-10
+    intervalDays: 90
+  - id: CTRL-03
+    title: Edge access restricted to authenticated identities
+    owner: Platform team
+    requirements: [SOC2-CC6.1]
+    evidenceSource: edge-access-logs
+    reviewedOn: 2026-10-05
+    intervalDays: 90
+  - id: CTRL-04
+    title: Erasure cases closed inside the thirty-day window
+    owner: Platform team
+    requirements: [GDPR-ART-17]
+    evidenceSource: erasure-case-registry
+    reviewedOn: 2026-07-01
+    intervalDays: 180

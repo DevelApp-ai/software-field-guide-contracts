@@ -1,0 +1,56 @@
+# Broken variant: a manifest nobody has reviewed this year — book
+# issue #107.
+#
+# The manifest's own reviewedOn is 2025-09-15, more than a year
+# before the 2026-10-20 anchor: a controls manifest nobody refreshed
+# is a map of an estate that no longer exists. The validator fails
+# with controls/reviewed-stale and the gate renders the unreadable
+# verdict.
+
+version: 1
+reviewedOn: 2025-09-15
+owner: Platform team
+
+evidenceSources:
+  - id: edge-firewall-review
+    kind: review record
+    status: live
+  - id: encryption-config-scan
+    kind: scanner output
+    status: live
+  - id: edge-access-logs
+    kind: log store
+    status: live
+  - id: erasure-case-registry
+    kind: case registry
+    status: live
+
+controls:
+  - id: CTRL-01
+    title: Edge firewall rule set reviewed and re-approved quarterly
+    owner: Platform team
+    requirements: [PCI-DSS-2.2.7]
+    evidenceSource: edge-firewall-review
+    reviewedOn: 2026-09-15
+    intervalDays: 180
+  - id: CTRL-02
+    title: Data-at-rest encryption verified by the nightly config scan
+    owner: Storefront team
+    requirements: [PCI-DSS-3.4.1]
+    evidenceSource: encryption-config-scan
+    reviewedOn: 2026-10-10
+    intervalDays: 90
+  - id: CTRL-03
+    title: Edge access restricted to authenticated identities
+    owner: Platform team
+    requirements: [SOC2-CC6.1]
+    evidenceSource: edge-access-logs
+    reviewedOn: 2026-10-05
+    intervalDays: 90
+  - id: CTRL-04
+    title: Erasure cases closed inside the thirty-day window
+    owner: Platform team
+    requirements: [GDPR-ART-17]
+    evidenceSource: erasure-case-registry
+    reviewedOn: 2026-07-01
+    intervalDays: 180

@@ -1,0 +1,55 @@
+# Broken variant: a control citing retired evidence — book issue
+# #107.
+#
+# The manifest declares the encryption-config-scan retired, but
+# CTRL-02 still cites it: a control pointing at evidence nobody
+# collects is a control nobody can audit. The gate fails with
+# gate/evidence-dead and renders the drifts verdict.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+evidenceSources:
+  - id: edge-firewall-review
+    kind: review record
+    status: live
+  - id: encryption-config-scan
+    kind: scanner output
+    status: retired
+  - id: edge-access-logs
+    kind: log store
+    status: live
+  - id: erasure-case-registry
+    kind: case registry
+    status: live
+
+controls:
+  - id: CTRL-01
+    title: Edge firewall rule set reviewed and re-approved quarterly
+    owner: Platform team
+    requirements: [PCI-DSS-2.2.7]
+    evidenceSource: edge-firewall-review
+    reviewedOn: 2026-09-15
+    intervalDays: 180
+  - id: CTRL-02
+    title: Data-at-rest encryption verified by the nightly config scan
+    owner: Storefront team
+    requirements: [PCI-DSS-3.4.1]
+    evidenceSource: encryption-config-scan
+    reviewedOn: 2026-10-10
+    intervalDays: 90
+  - id: CTRL-03
+    title: Edge access restricted to authenticated identities
+    owner: Platform team
+    requirements: [SOC2-CC6.1]
+    evidenceSource: edge-access-logs
+    reviewedOn: 2026-10-05
+    intervalDays: 90
+  - id: CTRL-04
+    title: Erasure cases closed inside the thirty-day window
+    owner: Platform team
+    requirements: [GDPR-ART-17]
+    evidenceSource: erasure-case-registry
+    reviewedOn: 2026-07-01
+    intervalDays: 180
