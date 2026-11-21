@@ -1,0 +1,61 @@
+# IAM-broker grant document — The Software Field Guide, issue #104.
+#
+# The supply-chain IAM-broker scope chapter's YAML: the broker's
+# grants as data — the consumer identities the broker declares,
+# and every grant it issued, each naming one principal, one
+# component pinned by sha256 digest, an allowed action set, and an
+# expiry. Judged at the broker gate against the component package
+# manifest (the component gate's word, book issue #101) — a
+# conformance gate, not an advisor: a grant whose component the
+# manifest neither packages nor pins, a grant pinned at a digest
+# the manifest never published, a wildcard or glob action, an
+# undeclared principal, a duplicated grant, and an expired grant
+# still on the books are all refused. The gate is honest about what
+# it models: the action vocabulary is not modeled (any exact,
+# non-metacharacter action name is allowed — the gate refuses broad
+# scopes, not unfamiliar verbs), and the expiry has no maximum
+# horizon (only not in the past).
+#
+# The grants are seeded, after the chapter's worked example: the
+# platform team's broker declaring two consumer identities and
+# issuing two grants over the payments team's checkout package
+# (examples/component/package.yaml) — the storefront build pulling
+# the checkout package pinned at its published artifact digest, and
+# the payments build pulling and attesting the platform baseline
+# pinned as the package's dependency. Every resolution the grants
+# rely on is the manifest's own word. Example dates are chosen
+# relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The consumer identities the broker declares — the identities a
+# grant may name. A grant naming an undeclared principal is
+# refused: an identity the broker never declared is a principal
+# nobody granted.
+principals:
+  - storefront-build
+  - payments-build
+
+grants:
+  # The storefront build consumes the checkout package: pull only,
+  # pinned to the digest the package publishes, until the end of
+  # the quarter the review covers.
+  - principal: storefront-build
+    component: payments-checkout
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    actions:
+      - pull
+    expires: 2026-12-31
+
+  # The payments build consumes the platform baseline the checkout
+  # package pins as its dependency: pull and attest, pinned to the
+  # digested dependency, until the platform team's next review.
+  - principal: payments-build
+    component: platform-baseline
+    digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+    actions:
+      - pull
+      - attest
+    expires: 2027-01-31
