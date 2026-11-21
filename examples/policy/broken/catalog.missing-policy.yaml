@@ -1,0 +1,33 @@
+# Broken variant for the policy demo — The Software Field Guide,
+# issue #103.
+#
+# The drift: the tier-egress row is gone. The checkout package
+# binds tier-egress (examples/component/package.yaml), and the
+# catalog — the platform's only word on which policies exist —
+# has no row for it (gate/policy-unresolved). A deny-by-default
+# claim about a policy the estate never admitted is a claim nobody
+# can check. Caught by
+# `make policy-gate POLICY_CATALOG=examples/policy/broken/catalog.missing-policy.yaml`.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+policies:
+  - policy: pci-scan
+    version: 3.2.0
+    digest: b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324
+    signature:
+      keyId: key-2026-q4
+      signedDigest: b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324
+    posture: enforce
+    path: /policies/pci-scan.rego
+
+  - policy: allowed-regions
+    version: 1.0.3
+    digest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    signature:
+      keyId: key-2026-q4
+      signedDigest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    posture: audit
+    path: /policies/allowed-regions.rego

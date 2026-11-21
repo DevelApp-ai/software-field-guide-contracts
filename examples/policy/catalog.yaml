@@ -1,0 +1,65 @@
+# Policy component catalog — The Software Field Guide, issue #103.
+#
+# The policy-component chapter's catalog: the platform's word — the
+# policy components it admits, each a versioned, signed row postured
+# on the audit→warn→enforce ladder and bound to one exact path. The
+# policy gate joins the component package manifest's policyBindings
+# (examples/component/package.yaml) against this catalog — a
+# conformance gate, not an advisor: a package binding a policy the
+# catalog never declared, and a binding rendered at a path the
+# catalog never named, are both refused. The catalog is honest
+# about what it models: it records the evidence facts — version,
+# digest, signature, posture, path — and the validator checks they
+# are present and internally consistent (the signed digest equals
+# the published digest); the cryptography is the signing
+# infrastructure's word, not policy's.
+#
+# The catalog is shared: the same rows back many packages, and a
+# row no package currently binds (here: allowed-regions, held in
+# audit for the storefront packages that will bind it) is a policy
+# available, not a drift — the join judges pairs, not inventory.
+#
+# The estate is seeded, after the component-package chapter's
+# worked example: the platform admits the PCI scan and the tier
+# egress the checkout package binds — both enforced, at the exact
+# paths the manifest's policyBindings name — plus one audited
+# region policy no package in this demo binds. Example dates are
+# chosen relative to the CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# One row per policy component. The signature is recorded over the
+# digest the row publishes; the posture is the rung the policy sits
+# on, checkable rather than claimed; the path is the one canonical,
+# exact path the policy renders from — no globs.
+policies:
+  - policy: pci-scan
+    version: 3.2.0
+    digest: b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324
+    signature:
+      keyId: key-2026-q4
+      signedDigest: b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324
+    posture: enforce
+    path: /policies/pci-scan.rego
+
+  - policy: tier-egress
+    version: 1.1.0
+    digest: 54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc
+    signature:
+      keyId: key-2026-q4
+      signedDigest: 54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc
+    posture: enforce
+    path: /policies/tier-egress.rego
+
+  # Available, unbound in this demo: the checkout package binds
+  # two policies; this one waits for the storefront packages.
+  - policy: allowed-regions
+    version: 1.0.3
+    digest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    signature:
+      keyId: key-2026-q4
+      signedDigest: d52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480
+    posture: audit
+    path: /policies/allowed-regions.rego

@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the thirteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the fourteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -224,6 +224,7 @@ const ingressPolicy = await load('ingress')
 const citizenPolicy = await load('citizen')
 const componentPolicy = await load('component')
 const matrixPolicy = await load('matrix')
+const policyPolicy = await load('policy')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1468,6 +1469,103 @@ r = matrixAudit({ matrix: { ...matrixRenders, reviewedOn: '2024-10-01' } })
 assert(
 	hasFinding(r, 'matrix/reviewed-stale') && r.valid === false && r.verdict === 'unreadable',
 	'a matrix nobody re-reads fails honestly in wasm',
+)
+
+// --- policy ----------------------------------------------------------------
+//
+// Judged by the composed policy/audit entrypoint — the control
+// renders consistent with one card per bound policy, and every
+// seeded drift is refused (a conformance gate, not an advisor: the
+// same catalog backs many packages, and no row is a drift by
+// inventory).
+
+const policyCatalog = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	policies: [
+		{
+			policy: 'pci-scan',
+			version: '3.2.0',
+			digest: 'b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324',
+			signature: { keyId: 'key-2026-q4', signedDigest: 'b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324' },
+			posture: 'enforce',
+			path: '/policies/pci-scan.rego',
+		},
+		{
+			policy: 'tier-egress',
+			version: '1.1.0',
+			digest: '54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc',
+			signature: { keyId: 'key-2026-q4', signedDigest: '54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc' },
+			posture: 'enforce',
+			path: '/policies/tier-egress.rego',
+		},
+		{
+			policy: 'allowed-regions',
+			version: '1.0.3',
+			digest: 'd52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480',
+			signature: { keyId: 'key-2026-q4', signedDigest: 'd52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480' },
+			posture: 'audit',
+			path: '/policies/allowed-regions.rego',
+		},
+	],
+}
+
+const policyPackage = {
+	...componentPackage,
+	policyBindings: [
+		{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+		{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+	],
+}
+
+const policyAudit = (extra) => policyPolicy.evaluate({
+	catalog: policyCatalog,
+	package: policyPackage,
+	today,
+	catalogFile: 'catalog.yaml',
+	packageFile: 'package.yaml',
+	...extra,
+})[0].result
+
+r = policyAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.policies.length === 2,
+	'the policy control passes the audit in wasm and renders consistent',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.filter((x) => x.policy !== 'tier-egress') } })
+assert(
+	hasFinding(r, 'gate/policy-unresolved') && r.valid === false && r.verdict === 'drifts',
+	'a binding to a policy the catalog never declared is refused in wasm',
+)
+assert(
+	r.policies.some((c) => c.policy === 'tier-egress' && c.verdict === 'drifts'),
+	'the unresolved-binding card renders drifts in wasm',
+)
+
+r = policyAudit({ package: { ...policyPackage, policyBindings: [{ policy: 'pci-scan', path: '/policies/pci-scan.rego' }, { policy: 'tier-egress', path: '/policies/tier-egress-v2.rego' }] } })
+assert(
+	hasFinding(r, 'gate/binding-path-drift') && r.valid === false && r.verdict === 'drifts',
+	'a binding rendered at a path the catalog never named is refused in wasm',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.map((x) => x.policy === 'pci-scan' ? { ...x, path: '/policies/pci-*.rego' } : x) } })
+assert(
+	hasFinding(r, 'policy/path-glob') && r.valid === false && r.verdict === 'unreadable',
+	'a glob-shaped catalog path fails honestly in wasm',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.map((x) => x.policy === 'pci-scan' ? { ...x, signature: undefined } : x) } })
+assert(
+	hasFinding(r, 'policy/signature-required') && r.valid === false && r.verdict === 'unreadable',
+	'an unsigned policy component fails honestly in wasm',
+)
+
+r = policyAudit({ package: { ...policyPackage, policyBindings: [{ policy: 'pci-scan', path: '/policies/pci-*.rego' }, { policy: 'tier-egress', path: '/policies/tier-egress.rego' }] } })
+assert(
+	hasFinding(r, 'package/binding-path-glob') && r.valid === false && r.verdict === 'unreadable',
+	'a glob-shaped package binding fails honestly in wasm',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

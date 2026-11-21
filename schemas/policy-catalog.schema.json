@@ -1,0 +1,80 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/policy-catalog.schema.json",
+	"title": "Policy component catalog",
+	"description": "The policy component catalog, as defined in The Software Field Guide, issue #103: the platform's word — the policy components it admits, each a versioned, signed row bound to one exact path and postured on the audit→warn→enforce ladder. Judged at the policy gate against the component package manifest's policyBindings, as a conformance gate: the package is in conformance when every policy it binds exists in this catalog and is bound at the catalog's declared path. A deny-by-default posture is a checkable fact only when the record says which rung it sits in. This schema mirrors the shape rules of the Rego validator (policies/policy); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, one row per policy name, the signed digest internally consistent with the published digest, paths without glob metacharacters, and the two drifts judged at the join. The 'every binding resolves and vice versa' question is honest here as a pair agreement: the same catalog backs many packages, so a catalog row no package currently binds is a policy available, not a drift.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "policies"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the catalog. The catalog is versioned like the policies it admits."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the catalog was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the catalog. Postures without an owner are postures nobody maintains."
+		},
+		"policies": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The admitted policy components, one row per policy name. Each row is the platform's word on that policy: versioned, signed over its digest, postured on the ladder, and bound to one exact canonical path.",
+			"items": {
+				"type": "object",
+				"required": ["policy", "version", "digest", "signature", "posture", "path"],
+				"additionalProperties": true,
+				"properties": {
+					"policy": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The policy component's name. The package bindings are joined to the catalog by this name."
+					},
+					"version": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The policy component's version. A policy is in force only at the version the record names."
+					},
+					"digest": {
+						"type": "string",
+						"pattern": "^[a-f0-9]{64}$",
+						"description": "The sha256 digest of the policy artifact. The signature must record the same digest."
+					},
+					"signature": {
+						"type": "object",
+						"required": ["keyId", "signedDigest"],
+						"additionalProperties": true,
+						"properties": {
+							"keyId": {
+								"type": "string",
+								"minLength": 1,
+								"description": "The key that signed the digest. A signature without its key is evidence nobody can trace."
+							},
+							"signedDigest": {
+								"type": "string",
+								"pattern": "^[a-f0-9]{64}$",
+								"description": "The digest the signature covers. Must equal the row's digest — the validator checks internal consistency, not cryptographic validity."
+							}
+						}
+					},
+					"posture": {
+						"type": "string",
+						"enum": ["audit", "warn", "enforce"],
+						"description": "The policy's rung on the posture ladder. A posture the ladder never heard of is a deny-by-default claim nobody can check."
+					},
+					"path": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The policy's one canonical, exact path — no globs. The package bindings are judged against this path; the join refuses to guess what a wildcard matched."
+					}
+				}
+			}
+		}
+	}
+}

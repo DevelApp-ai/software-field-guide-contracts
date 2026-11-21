@@ -1,0 +1,84 @@
+# Broken variant for the policy demo — The Software Field Guide,
+# issue #103.
+#
+# The drift: the package's pci-scan binding is glob-shaped. The
+# component validator (#101) never asked whether a binding path is
+# exact — it validates the package, not the policy join — and the
+# render-matrix gate (#102) judged pairs, not shapes. This gate
+# does: a binding must be an exact path, and a binding that can
+# match anything is a binding the join refuses to guess
+# (package/binding-path-glob, verdict unreadable). Caught by
+# `make policy-gate POLICY_PACKAGE=examples/policy/broken/package.path-glob-binding.yaml`.
+
+# Component package manifest — The Software Field Guide, issue #101.
+#
+# The component-package chapter's YAML: the package as data — its
+# name, version, and tier, the sha256 artifact digest it publishes,
+# the signature and attestation recorded over that digest, its
+# provenance, and the dependencies it pins by digest. Judged at the
+# package gate against the component registry (the estate's admitted
+# packages, each as a component, version, tier, and digest row) — a
+# conformance gate, not an advisor: an unregistered package, an
+# artifact drifted from its registration, an unresolved dependency,
+# a stale pin, and a customer-tier package depending downward are
+# all refused. The validator is honest about what it models: it
+# checks the evidence facts are recorded and internally consistent
+# (the signed digest equals the artifact digest, the pins equal the
+# registry's digests) — not that signatures are cryptographically
+# valid.
+#
+# The package is seeded, after the chapter's worked example: the
+# payments team's customer-tier checkout package, registered at
+# v1.4.0 with the digest it publishes, pinning one dependency on
+# the platform team's general-tier baseline. Example dates are
+# chosen relative to the CI anchor date 2026-10-20.
+
+component: payments-checkout
+version: 1.4.0
+hierarchy: customer
+reviewedOn: 2026-10-01
+owner: Payments team
+
+# The sha256 digest of the artifact this manifest publishes. The
+# registry must record the same digest for this component+version,
+# or the package has drifted from its registration.
+artifactDigest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+
+# The signature recorded over the artifact digest. The validator
+# checks the signedDigest equals the artifactDigest; the
+# cryptography is the signing infrastructure's word, not policy's.
+signature:
+  keyId: key-2026-q4
+  signedDigest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+
+# The attestation recorded with the package: what it claims to be,
+# and who checked. A claim without a claimant is nobody's word.
+attestation:
+  statement: the checkout artifact was built by the release pipeline
+  by: release pipeline
+
+# Where the artifact came from, and which commit built it. An
+# artifact without a commit is an artifact nobody can rebuild.
+provenance:
+  source: payments/checkout.git
+  commit: 9f31c0e
+
+# The packages this one builds on, each pinned by sha256 digest. A
+# dependency pinned by name alone is a dependency that can change
+# under the package; the gate requires the registry to carry each
+# one at exactly the pinned digest.
+dependencies:
+  - package: platform-baseline
+    digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+
+# The policy bindings the package ships: the policies that must be
+# in force wherever the component renders, each bound to the exact
+# path it renders from. The render-matrix gate (book issue #102)
+# judges every fabric's rendered copy of the package against these —
+# a binding missing from one fabric is a policy that fabric never
+# ran. Absent, the package declares none.
+policyBindings:
+  - policy: pci-scan
+    path: /policies/pci-*.rego
+  - policy: tier-egress
+    path: /policies/tier-egress.rego
