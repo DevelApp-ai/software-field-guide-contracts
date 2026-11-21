@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate, Segment Gate, Ingress Gate, Citizen Gate, Component Gate — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate, Segment Gate, Ingress Gate, Citizen Gate, Component Gate, Lifecycle Gate — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -169,6 +169,7 @@
 		<button role="tab" id="tab-citizen" aria-selected="false">Citizen gate</button>
 		<button role="tab" id="tab-component" aria-selected="false">Component gate</button>
 		<button role="tab" id="tab-matrix" aria-selected="false">Matrix gate</button>
+		<button role="tab" id="tab-lifecycle" aria-selected="false">Lifecycle gate</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -268,6 +269,14 @@
 		<textarea id="editor-matrix-renders" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-lifecycle">
+		<p class="hint">Gate the estate's <strong>component lifecycle record</strong> against the <strong>component package manifest</strong> — the component's paper trail, transition by transition: the bake that produced its image, the patch folded in, the upgrade with its rehearsed rollback. A bake without its image digest, a patch without provenance, an upgrade nobody rehearsed the way back for, a transition the record's review never saw, a record nobody has re-read in a year, and a record for a component the manifest never packaged: all refused — a conformance gate, not an advisor, and a transition recorded once and never refreshed is a question, not a fact. Try the loaded example, then change the record's <code>component</code> to <code>storefront-theme</code> and watch the mismatch refuse the whole trail.</p>
+		<label for="editor-lifecycle-package">Component package manifest (the component's own word, joined by name)</label>
+		<textarea id="editor-lifecycle-package" spellcheck="false"></textarea>
+		<label for="editor-lifecycle-record">Lifecycle record (versioned transitions and their evidence)</label>
+		<textarea id="editor-lifecycle-record" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -283,7 +292,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough, <code>make lifecycle-demo</code> for the component lifecycle evidence walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -301,6 +310,7 @@ const tabs = [
 	{ id: 'citizen', pkg: 'citizen' },
 	{ id: 'component', pkg: 'component' },
 	{ id: 'matrix', pkg: 'matrix' },
+	{ id: 'lifecycle', pkg: 'lifecycle' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -850,6 +860,35 @@ examples.matrixRenders = {
 	],
 };
 
+examples.lifecycleRecord = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Payments team',
+	component: 'payments-checkout',
+	transitions: [
+		{
+			type: 'bake',
+			recordedOn: '2026-09-30',
+			imageDigest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+		},
+		{
+			type: 'patch',
+			recordedOn: '2026-10-08',
+			provenance: {
+				source: 'payments/checkout.git',
+				commit: '9f31c0e',
+			},
+		},
+		{
+			type: 'upgrade',
+			recordedOn: '2026-10-15',
+			rollback: {
+				rehearsedOn: '2026-10-14',
+			},
+		},
+	],
+};
+
 examples.bundle = {
 	enclaves: [examples.enclave, {
 		enclave: 'payments',
@@ -895,7 +934,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix' && id !== 'lifecycle';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -966,6 +1005,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('matrix-package'), examples.matrixPackage],
 			[editor('matrix-renders'), examples.matrixRenders],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'lifecycle') {
+		for (const [el, value] of [
+			[editor('lifecycle-package'), examples.componentPackage],
+			[editor('lifecycle-record'), examples.lifecycleRecord],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -1232,6 +1278,30 @@ function renderMatrix(result) {
 	findingsBox.append(card);
 }
 
+function renderLifecycle(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'verdict';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' ' + result.verdict;
+	card.append(chip, title);
+	const head = document.createElement('p');
+	head.className = 'summary';
+	head.textContent = 'conformance gate, not advisor: one card per recorded transition — a transition recorded once and never refreshed is a question, not a fact';
+	card.append(head);
+	for (const item of result.transitions) {
+		const row = document.createElement('p');
+		row.className = item.verdict === 'consistent' ? 'summary' : 'msg';
+		row.textContent = item.type + '  →  ' + item.verdict + '  (' + item.detail + ')';
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -1432,6 +1502,24 @@ validateBtn.addEventListener('click', async () => {
 			packageFile: 'package.yaml',
 			matrixFile: 'matrix.yaml',
 		};
+	} else if (active === 'lifecycle') {
+		const pkg = parseEditor('lifecycle-package');
+		const lifecycle = parseEditor('lifecycle-record');
+		if (pkg.error) {
+			setStatus('Component package manifest: ' + pkg.error, true);
+			return;
+		}
+		if (lifecycle.error) {
+			setStatus('Lifecycle record: ' + lifecycle.error, true);
+			return;
+		}
+		input = {
+			package: pkg.value,
+			lifecycle: lifecycle.value,
+			today: '2026-10-20',
+			packageFile: 'package.yaml',
+			lifecycleFile: 'lifecycle.yaml',
+		};
 	} else {
 		const parsed = parseEditor(active);
 		if (parsed.error) {
@@ -1515,6 +1603,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderMatrix(result);
 			}
+		} else if (active === 'lifecycle') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.transitions) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderLifecycle(result);
+			}
 		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
@@ -1561,6 +1655,9 @@ exampleBtn.addEventListener('click', () => {
 	} else if (active === 'matrix') {
 		editor('matrix-package').value = JSON.stringify(examples.matrixPackage, null, 2);
 		editor('matrix-renders').value = JSON.stringify(examples.matrixRenders, null, 2);
+	} else if (active === 'lifecycle') {
+		editor('lifecycle-package').value = JSON.stringify(examples.componentPackage, null, 2);
+		editor('lifecycle-record').value = JSON.stringify(examples.lifecycleRecord, null, 2);
 	} else {
 		editor(active).value = JSON.stringify(examples[active], null, 2);
 	}
