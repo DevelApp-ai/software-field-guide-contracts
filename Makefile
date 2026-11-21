@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the thirteen wasm bundles into build/wasm/
+#   make build         compile the fourteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -68,6 +68,14 @@
 #                      package manifest [COMPONENT_PACKAGE=... MATRIX=...]
 #   make matrix-demo  the done-when proof: one fabric quietly running a
 #                      different release caught citing both files
+#   make check-broker validate the broker grant document (the consumer
+#                      identities it declares and the grants it issued)
+#                      [BROKER_GRANTS=...] [TODAY=YYYY-MM-DD]
+#   make broker-gate  gate the grants against the component package
+#                      manifest [BROKER_GRANTS=... COMPONENT_PACKAGE=...]
+#                      [TODAY=YYYY-MM-DD]
+#   make broker-demo the done-when proof: a wildcard grant caught naming
+#                      the scope the broker exists to prevent
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -106,6 +114,7 @@ CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
 COMPONENT_PACKAGE ?= examples/component/package.yaml
 COMPONENT_REGISTRY ?= examples/component/registry.yaml
 MATRIX ?= examples/matrix/matrix.yaml
+BROKER_GRANTS ?= examples/broker/grants.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -119,6 +128,7 @@ MATRIX ?= examples/matrix/matrix.yaml
 	check-citizen citizen-gate citizen-demo \
 	check-component component-gate component-demo \
 	check-matrix matrix-gate matrix-demo \
+	check-broker broker-gate broker-demo \
 	examples ci
 
 fmt:
@@ -172,6 +182,9 @@ build:
 	$(OPA) build -t wasm -e matrix/audit -o build/matrix.tar.gz policies
 	tar -xzf build/matrix.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/matrix.wasm
+	$(OPA) build -t wasm -e broker/audit -o build/broker.tar.gz policies
+	tar -xzf build/broker.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/broker.wasm
 
 site: build
 	rm -rf site-build
@@ -1154,6 +1167,125 @@ matrix-demo:
 	@echo "caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree"
 	@echo "--- matrix demo: all done-when proofs passed ---"
 
+# Validate the broker grant document alone — the declared consumer
+# identities and the grants the broker issued, each naming one
+# principal, one component pinned by sha256 digest, an exact action
+# set (the wildcard and the metacharacter are refused), and an
+# expiry that is still in the future.
+check-broker:
+	@test -f "$(BROKER_GRANTS)" || { echo "usage: make check-broker [BROKER_GRANTS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(BROKER_GRANTS)' \
+		| jq -cs --arg today "$(TODAY)" --arg brokerFile "$(BROKER_GRANTS)" '{broker: .[0], today: $$today, brokerFile: $$brokerFile}' \
+		| $(OPA) eval -d policies -I 'data.broker.validate' --format=pretty | tee build/check-broker.json
+	@jq -e '.valid == true' build/check-broker.json > /dev/null \
+		|| { echo "check-broker: the broker grant document is not in conformance — findings above"; exit 1; }
+
+# Gate the broker's grants against the component package manifest —
+# every grant resolved by the manifest at exactly its pinned digest,
+# for a declared principal, with the clock still on it. Conformance
+# gate, not advisor: a grant for a component nobody packaged, a
+# grant pinned at a digest the package never published, a wildcard
+# or metacharacter action, an identity the broker never declared, a
+# duplicated grant, and an expired grant still on the books are all
+# refused. The package's own conformance is the component gate's
+# word (book issue #101); this gate reads only the fields the grant
+# join needs.
+broker-gate:
+	@test -f "$(BROKER_GRANTS)" && test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make broker-gate [BROKER_GRANTS=... COMPONENT_PACKAGE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(BROKER_GRANTS)' '$(COMPONENT_PACKAGE)' \
+		| jq -cs --arg today "$(TODAY)" --arg brokerFile "$(BROKER_GRANTS)" --arg packageFile "$(COMPONENT_PACKAGE)" \
+			'{broker: .[0], package: .[1], today: $$today, brokerFile: $$brokerFile, packageFile: $$packageFile}' \
+		| $(OPA) eval -d policies -I 'data.broker.audit' --format=pretty | tee build/broker-gate.json
+	@jq -e '.valid == true' build/broker-gate.json > /dev/null \
+		|| { echo "broker-gate: the broker grants are not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #104: the supply-chain IAM-broker
+# scope gate refuses. Runs the control grants end to end, then proves
+# every broken variant bites with its named rule — the wildcard and
+# the metacharacter actions, the expired grant, the identity the
+# broker never declared, the component the manifest never named, and
+# the digest the package never published.
+broker-demo:
+	@echo "--- 1. the broker grant document validates ---"
+	@$(MAKE) check-broker TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) broker-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/broker-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/broker-gate.json; exit 1; }
+	@jq -e '.grants | length == 2' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per issued grant"; cat build/broker-gate.json; exit 1; }
+	@jq -e '[.grants[] | select(.verdict != "consistent")] | length == 0' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: a control card drifted"; cat build/broker-gate.json; exit 1; }
+	@echo "control verdict: consistent — two grants, two cards, the manifest vouches for both"
+	@echo "--- 3. a wildcard grant is caught at the gate ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.wildcard-action.yaml TODAY=$(ANCHOR_TODAY) > build/broker-wildcard.txt 2>&1; \
+		then echo "FAIL: the wildcard grant passed the gate"; cat build/broker-wildcard.txt; exit 1; \
+		else grep -q 'grant/action-wildcard' build/broker-wildcard.txt \
+			|| { echo "FAIL: the gate failed without the wildcard rule"; cat build/broker-wildcard.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: grant/action-wildcard — a grant that can do anything is the scope the broker exists to prevent"
+	@echo "--- 4. a metacharacter action is caught at the gate ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.metachar-action.yaml TODAY=$(ANCHOR_TODAY) > build/broker-metachar.txt 2>&1; \
+		then echo "FAIL: the metacharacter action passed the gate"; cat build/broker-metachar.txt; exit 1; \
+		else grep -q 'grant/action-glob' build/broker-metachar.txt \
+			|| { echo "FAIL: the gate failed without the glob rule"; cat build/broker-metachar.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: grant/action-glob — an action set is exact names or it is not a set"
+	@echo "--- 5. an expired grant still on the books is caught at the gate ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.expired.yaml TODAY=$(ANCHOR_TODAY) > build/broker-expired.txt 2>&1; \
+		then echo "FAIL: the expired grant passed the gate"; cat build/broker-expired.txt; exit 1; \
+		else grep -q 'grant/expires-in-past' build/broker-expired.txt \
+			|| { echo "FAIL: the gate failed without the expiry rule"; cat build/broker-expired.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: grant/expires-in-past — an expired grant is a grant the broker never revoked"
+	@echo "--- 6. an identity the broker never declared is caught at the gate ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.unknown-principal.yaml TODAY=$(ANCHOR_TODAY) > build/broker-undeclared.txt 2>&1; \
+		then echo "FAIL: the undeclared principal passed the gate"; cat build/broker-undeclared.txt; exit 1; \
+		else grep -q 'grant/principal-undeclared' build/broker-undeclared.txt \
+			|| { echo "FAIL: the gate failed without the principal rule"; cat build/broker-undeclared.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: grant/principal-undeclared — an identity the broker never declared is a principal nobody granted"
+	@echo "--- 7. a grant for a component the manifest never named is caught at the join ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.component-unresolved.yaml TODAY=$(ANCHOR_TODAY) > build/broker-unresolved.txt 2>&1; \
+		then echo "FAIL: the unresolved grant passed the gate"; cat build/broker-unresolved.txt; exit 1; \
+		else grep -q 'gate/component-unresolved' build/broker-unresolved.txt \
+			|| { echo "FAIL: the gate failed without the unresolved-component rule"; cat build/broker-unresolved.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: gate/component-unresolved — a grant for a component nobody packaged, citing both files"
+	@echo "--- 8. a grant pinned at a digest the package never published is caught at the join ---"
+	@if $(MAKE) broker-gate BROKER_GRANTS=examples/broker/broken/grants.digest-drift.yaml TODAY=$(ANCHOR_TODAY) > build/broker-digest.txt 2>&1; \
+		then echo "FAIL: the digest drift passed the gate"; cat build/broker-digest.txt; exit 1; \
+		else grep -q 'gate/digest-drift' build/broker-digest.txt \
+			|| { echo "FAIL: the gate failed without the digest-rule"; cat build/broker-digest.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/broker-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/broker-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/broker-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/broker-gate.json; exit 1; }
+	@echo "caught as expected: gate/digest-drift — a grant for bytes the package never published, citing both files"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -1180,7 +1312,9 @@ examples:
 	$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
 	$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-broker TODAY=$(ANCHOR_TODAY)
+	$(MAKE) broker-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo broker-demo
 	$(OPA) fmt --fail -l policies
