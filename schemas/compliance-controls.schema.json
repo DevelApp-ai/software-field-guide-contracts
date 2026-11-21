@@ -1,0 +1,103 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/compliance-controls.schema.json",
+	"title": "Compliance controls manifest",
+	"description": "The controls manifest, as defined in The Software Field Guide, issue #107: the compliance-as-code chapter's YAML — the controls as data. The manifest declares the named evidence sources the estate collects (each live or retired), and every control with its title, owner, the requirement ids it maps onto, the evidence source it cites, and its review clock — the day it was last reviewed and the interval it promises. Judged at the compliance gate against the requirements catalog, as a conformance gate — not an advisor: a requirement no control maps to, a control citing a requirement the catalog never declared, a control pointing at a retired source, and a control whose review clock has lapsed are all refused, each citing the control, the requirement, or the clock. The validator is honest about what it models: it checks that citations resolve inside the manifest and that review clocks have not lapsed — that the evidence store still holds its logs is outside what a policy can check. This schema mirrors the shape rules of the Rego validator (policies/compliance); the validator additionally enforces the semantic rules a JSON schema cannot — the manifest's reviewedOn a real calendar date not in the future and not older than 365 days, requirement mappings present and well-formed, evidence citations resolving to a declared source, clocks readable as real dates and positive-integer intervals, and no duplicated control or source ids.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "evidenceSources", "controls"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the controls manifest. Controls are versioned data, like the requirements they satisfy."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the manifest was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the controls. Controls without an owner are nobody's work."
+		},
+		"evidenceSources": {
+			"type": "array",
+			"description": "The named evidence sources the estate collects, each with a kind and a status. The controls cite these by id; the gate refuses a control citing a source the manifest retired (gate/evidence-dead).",
+			"items": {
+				"type": "object",
+				"required": ["id", "kind", "status"],
+				"additionalProperties": true,
+				"properties": {
+					"id": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The source's id. The controls cite it, and a source nobody can cite is a source nobody can audit."
+					},
+					"kind": {
+						"type": "string",
+						"minLength": 1,
+						"description": "What the source is (a review record, a scanner output, a log store) — what tells the auditor where to look."
+					},
+					"status": {
+						"type": "string",
+						"enum": ["live", "retired"],
+						"description": "Whether the estate still collects the source. A control citing a retired source is dead evidence."
+					}
+				}
+			}
+		},
+		"controls": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The control rows: the estate's compliance work, as data. Every control maps onto requirement ids from the companion catalog, cites one evidence source by id, and carries its own review clock (reviewedOn plus intervalDays). The gate judges the mappings, the citation, and the clock — and joins every mapped id against the requirements catalog (examples/compliance/requirements.yaml) in both directions.",
+			"items": {
+				"type": "object",
+				"required": ["id", "title", "owner", "requirements", "evidenceSource", "reviewedOn", "intervalDays"],
+				"additionalProperties": true,
+				"properties": {
+					"id": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The control's id. The findings cite it and the requirement cards name it."
+					},
+					"title": {
+						"type": "string",
+						"minLength": 1,
+						"description": "What the control does. An untitled control is a finding nobody can explain to an auditor."
+					},
+					"owner": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The team that operates the control. A control without an owner is a control nobody operates."
+					},
+					"requirements": {
+						"type": "array",
+						"minItems": 1,
+						"description": "The requirement ids this control maps onto, each declared in the requirements catalog. Every control exists to satisfy a requirement — an unmapped control is busywork with no compliance meaning.",
+						"items": {
+							"type": "string",
+							"minLength": 1
+						}
+					},
+					"evidenceSource": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The evidence source this control cites, by id. A citation must resolve to a declared, live source — evidence nobody collects is a control nobody can audit."
+					},
+					"reviewedOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The date the control was last reviewed, YYYY-MM-DD. The clock cannot read anything else."
+					},
+					"intervalDays": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "The review interval the control promises, in days. The gate flags a clock whose reviewedOn plus intervalDays falls before today (gate/review-expired)."
+					}
+				}
+			}
+		}
+	}
+}
