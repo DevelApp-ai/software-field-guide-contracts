@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the thirteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the fourteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -224,6 +224,7 @@ const ingressPolicy = await load('ingress')
 const citizenPolicy = await load('citizen')
 const componentPolicy = await load('component')
 const matrixPolicy = await load('matrix')
+const compliancePolicy = await load('compliance')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1468,6 +1469,121 @@ r = matrixAudit({ matrix: { ...matrixRenders, reviewedOn: '2024-10-01' } })
 assert(
 	hasFinding(r, 'matrix/reviewed-stale') && r.valid === false && r.verdict === 'unreadable',
 	'a matrix nobody re-reads fails honestly in wasm',
+)
+
+// --- compliance -----------------------------------------------------------
+
+const complianceControls = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	evidenceSources: [
+		{ id: 'edge-firewall-review', kind: 'review record', status: 'live' },
+		{ id: 'encryption-config-scan', kind: 'scanner output', status: 'live' },
+		{ id: 'edge-access-logs', kind: 'log store', status: 'live' },
+		{ id: 'erasure-case-registry', kind: 'case registry', status: 'live' },
+	],
+	controls: [
+		{
+			id: 'CTRL-01',
+			title: 'Edge firewall rule set reviewed and re-approved quarterly',
+			owner: 'Platform team',
+			requirements: ['PCI-DSS-2.2.7'],
+			evidenceSource: 'edge-firewall-review',
+			reviewedOn: '2026-09-15',
+			intervalDays: 180,
+		},
+		{
+			id: 'CTRL-02',
+			title: 'Data-at-rest encryption verified by the nightly config scan',
+			owner: 'Storefront team',
+			requirements: ['PCI-DSS-3.4.1'],
+			evidenceSource: 'encryption-config-scan',
+			reviewedOn: '2026-10-10',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-03',
+			title: 'Edge access restricted to authenticated identities',
+			owner: 'Platform team',
+			requirements: ['SOC2-CC6.1'],
+			evidenceSource: 'edge-access-logs',
+			reviewedOn: '2026-10-05',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-04',
+			title: 'Erasure cases closed inside the thirty-day window',
+			owner: 'Platform team',
+			requirements: ['GDPR-ART-17'],
+			evidenceSource: 'erasure-case-registry',
+			reviewedOn: '2026-07-01',
+			intervalDays: 180,
+		},
+	],
+}
+
+const complianceRequirements = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Compliance team',
+	requirements: [
+		{ id: 'PCI-DSS-2.2.7', title: 'Firewall and router rule sets are reviewed and re-approved at least every six months', source: 'PCI DSS v4.0' },
+		{ id: 'PCI-DSS-3.4.1', title: 'Cardholder data is rendered unreadable wherever it is stored', source: 'PCI DSS v4.0' },
+		{ id: 'SOC2-CC6.1', title: 'Logical access to infrastructure is restricted to authorized users', source: 'SOC 2 Type II, CC6.1' },
+		{ id: 'GDPR-ART-17', title: 'Personal data is erased within thirty days of a verified erasure request', source: 'GDPR art. 17' },
+	],
+}
+
+const complianceAudit = (extra) => compliancePolicy.evaluate({
+	controls: complianceControls,
+	requirements: complianceRequirements,
+	today,
+	controlsFile: 'controls.yaml',
+	requirementsFile: 'requirements.yaml',
+	...extra,
+})[0].result
+
+r = complianceAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.requirements.length === 4,
+	'the compliance control passes the audit in wasm and renders one card per requirement',
+)
+
+r = complianceAudit({ requirements: { ...complianceRequirements, requirements: [...complianceRequirements.requirements, { id: 'ISO-27001-A.5.1', title: 'Policies for information security are defined and approved', source: 'ISO/IEC 27001 A.5.1' }] } })
+assert(
+	hasFinding(r, 'gate/requirement-unmapped') && r.valid === false && r.verdict === 'drifts',
+	'a requirement no control maps to is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, evidenceSources: complianceControls.evidenceSources.map((s) => s.id === 'encryption-config-scan' ? { ...s, status: 'retired' } : s) } })
+assert(
+	hasFinding(r, 'gate/evidence-dead') && r.valid === false && r.verdict === 'drifts',
+	'a control citing evidence the manifest retired is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-04' ? { ...c, reviewedOn: '2026-08-15', intervalDays: 30 } : c) } })
+assert(
+	hasFinding(r, 'gate/review-expired') && r.valid === false && r.verdict === 'drifts',
+	'a control whose review clock lapsed is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-02' ? { ...c, requirements: ['ISO-27001-A.5.1'] } : c) } })
+assert(
+	hasFinding(r, 'gate/requirement-unknown') && r.valid === false && r.verdict === 'drifts',
+	'a control mapping onto a requirement the catalog never declared is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-02' ? { ...c, evidenceSource: undefined } : c) } })
+assert(
+	hasFinding(r, 'control/evidence-required') && r.valid === false && r.verdict === 'unreadable',
+	'a control without an evidence source fails honestly in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, reviewedOn: '2025-09-15' } })
+assert(
+	hasFinding(r, 'controls/reviewed-stale') && r.valid === false && r.verdict === 'unreadable',
+	'a controls manifest nobody re-reads fails honestly in wasm',
 )
 
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

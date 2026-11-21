@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate, Segment Gate, Ingress Gate, Citizen Gate, Component Gate — The Software Field Guide</title>
+<title>Estate and Seam Contract Validator, Authz Explainer, Obs Linter, Alert Gate, Action Scope, Erasure Gate, Segment Gate, Ingress Gate, Citizen Gate, Component Gate, Compliance Gate — The Software Field Guide</title>
 <style>
 	:root {
 		--ink: #1c2333;
@@ -169,6 +169,7 @@
 		<button role="tab" id="tab-citizen" aria-selected="false">Citizen gate</button>
 		<button role="tab" id="tab-component" aria-selected="false">Component gate</button>
 		<button role="tab" id="tab-matrix" aria-selected="false">Matrix gate</button>
+		<button role="tab" id="tab-compliance" aria-selected="false">Compliance gate</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -268,6 +269,14 @@
 		<textarea id="editor-matrix-renders" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-compliance">
+		<p class="hint">Gate the estate's <strong>controls manifest</strong> against the <strong>requirements catalog</strong> — compliance controls as data: each control's title, owner, the requirement ids it maps onto, the evidence source it cites, and its review clock, joined against the obligations the catalog declares. A requirement no control maps to, a control citing a requirement the catalog never declared, a control pointing at evidence the manifest retired, and a control whose review clock has lapsed: all refused — a conformance gate, not an advisor, and the requirement is not believed covered until a sound control backs it. The gate is honest about what it models: it checks that citations resolve and clocks have not lapsed, not that the evidence store still holds its logs. Try the loaded example, then flip the encryption-config-scan source to <code>retired</code> and watch the dead-evidence refusal land.</p>
+		<label for="editor-compliance-controls">Controls manifest (evidence sources and the controls that cite them)</label>
+		<textarea id="editor-compliance-controls" spellcheck="false"></textarea>
+		<label for="editor-compliance-requirements">Requirements catalog (the obligations the estate must satisfy)</label>
+		<textarea id="editor-compliance-requirements" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -283,7 +292,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough, <code>make compliance-demo</code> for the compliance controls walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -301,6 +310,7 @@ const tabs = [
 	{ id: 'citizen', pkg: 'citizen' },
 	{ id: 'component', pkg: 'component' },
 	{ id: 'matrix', pkg: 'matrix' },
+	{ id: 'compliance', pkg: 'compliance' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -850,6 +860,68 @@ examples.matrixRenders = {
 	],
 };
 
+examples.complianceControls = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	evidenceSources: [
+		{ id: 'edge-firewall-review', kind: 'review record', status: 'live' },
+		{ id: 'encryption-config-scan', kind: 'scanner output', status: 'live' },
+		{ id: 'edge-access-logs', kind: 'log store', status: 'live' },
+		{ id: 'erasure-case-registry', kind: 'case registry', status: 'live' },
+	],
+	controls: [
+		{
+			id: 'CTRL-01',
+			title: 'Edge firewall rule set reviewed and re-approved quarterly',
+			owner: 'Platform team',
+			requirements: ['PCI-DSS-2.2.7'],
+			evidenceSource: 'edge-firewall-review',
+			reviewedOn: '2026-09-15',
+			intervalDays: 180,
+		},
+		{
+			id: 'CTRL-02',
+			title: 'Data-at-rest encryption verified by the nightly config scan',
+			owner: 'Storefront team',
+			requirements: ['PCI-DSS-3.4.1'],
+			evidenceSource: 'encryption-config-scan',
+			reviewedOn: '2026-10-10',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-03',
+			title: 'Edge access restricted to authenticated identities',
+			owner: 'Platform team',
+			requirements: ['SOC2-CC6.1'],
+			evidenceSource: 'edge-access-logs',
+			reviewedOn: '2026-10-05',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-04',
+			title: 'Erasure cases closed inside the thirty-day window',
+			owner: 'Platform team',
+			requirements: ['GDPR-ART-17'],
+			evidenceSource: 'erasure-case-registry',
+			reviewedOn: '2026-07-01',
+			intervalDays: 180,
+		},
+	],
+};
+
+examples.complianceRequirements = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Compliance team',
+	requirements: [
+		{ id: 'PCI-DSS-2.2.7', title: 'Firewall and router rule sets are reviewed and re-approved at least every six months', source: 'PCI DSS v4.0' },
+		{ id: 'PCI-DSS-3.4.1', title: 'Cardholder data is rendered unreadable wherever it is stored', source: 'PCI DSS v4.0' },
+		{ id: 'SOC2-CC6.1', title: 'Logical access to infrastructure is restricted to authorized users', source: 'SOC 2 Type II, CC6.1' },
+		{ id: 'GDPR-ART-17', title: 'Personal data is erased within thirty days of a verified erasure request', source: 'GDPR art. 17' },
+	],
+};
+
 examples.bundle = {
 	enclaves: [examples.enclave, {
 		enclave: 'payments',
@@ -895,7 +967,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix' && id !== 'compliance';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -966,6 +1038,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('matrix-package'), examples.matrixPackage],
 			[editor('matrix-renders'), examples.matrixRenders],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'compliance') {
+		for (const [el, value] of [
+			[editor('compliance-controls'), examples.complianceControls],
+			[editor('compliance-requirements'), examples.complianceRequirements],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -1232,6 +1311,30 @@ function renderMatrix(result) {
 	findingsBox.append(card);
 }
 
+function renderCompliance(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'verdict';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' ' + result.verdict;
+	card.append(chip, title);
+	const head = document.createElement('p');
+	head.className = 'summary';
+	head.textContent = 'conformance gate, not advisor: one card per declared requirement — the requirement is not believed covered until a sound control backs it';
+	card.append(head);
+	for (const item of result.requirements) {
+		const row = document.createElement('p');
+		row.className = item.verdict === 'consistent' ? 'summary' : 'msg';
+		row.textContent = item.requirement + '  →  ' + item.verdict + '  (' + item.detail + ')';
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -1353,227 +1456,3 @@ validateBtn.addEventListener('click', async () => {
 			rendersFile: 'segment-renders.yaml',
 			flowsFile: 'flows.yaml',
 		};
-	} else if (active === 'ingress') {
-		const postureCase = parseEditor('ingress-case');
-		const drill = parseEditor('ingress-drill');
-		if (postureCase.error) {
-			setStatus('Ingress posture case: ' + postureCase.error, true);
-			return;
-		}
-		if (drill.error) {
-			setStatus('Drill record: ' + drill.error, true);
-			return;
-		}
-		input = {
-			case: postureCase.value,
-			drill: drill.value,
-			today: '2026-10-20',
-			caseFile: 'ingress-case.yaml',
-			drillFile: 'drill.yaml',
-		};
-	} else if (active === 'citizen') {
-		const manifest = parseEditor('citizen-manifest');
-		const spec = parseEditor('citizen-spec');
-		const registry = parseEditor('citizen-registry');
-		if (manifest.error) {
-			setStatus('Citizen app manifest: ' + manifest.error, true);
-			return;
-		}
-		if (spec.error) {
-			setStatus('App spec: ' + spec.error, true);
-			return;
-		}
-		if (registry.error) {
-			setStatus('Platform guardrail registry: ' + registry.error, true);
-			return;
-		}
-		input = {
-			manifest: manifest.value,
-			spec: spec.value,
-			registry: registry.value,
-			today: '2026-10-20',
-			manifestFile: 'manifest.yaml',
-			specFile: 'spec.yaml',
-			registryFile: 'guardrails.yaml',
-		};
-	} else if (active === 'component') {
-		const pkg = parseEditor('component-package');
-		const registry = parseEditor('component-registry');
-		if (pkg.error) {
-			setStatus('Component package manifest: ' + pkg.error, true);
-			return;
-		}
-		if (registry.error) {
-			setStatus('Component registry: ' + registry.error, true);
-			return;
-		}
-		input = {
-			package: pkg.value,
-			registry: registry.value,
-			today: '2026-10-20',
-			packageFile: 'package.yaml',
-			registryFile: 'registry.yaml',
-		};
-	} else if (active === 'matrix') {
-		const pkg = parseEditor('matrix-package');
-		const matrix = parseEditor('matrix-renders');
-		if (pkg.error) {
-			setStatus('Component package manifest: ' + pkg.error, true);
-			return;
-		}
-		if (matrix.error) {
-			setStatus('Render matrix: ' + matrix.error, true);
-			return;
-		}
-		input = {
-			package: pkg.value,
-			matrix: matrix.value,
-			today: '2026-10-20',
-			packageFile: 'package.yaml',
-			matrixFile: 'matrix.yaml',
-		};
-	} else {
-		const parsed = parseEditor(active);
-		if (parsed.error) {
-			setStatus(parsed.error, true);
-			return;
-		}
-		if (active === 'bundle') {
-			input = parsed.value;
-		} else {
-			const today = todayInput.value;
-			if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
-				setStatus('Pick the date to validate against (YYYY-MM-DD).', true);
-				return;
-			}
-			input = { contract: parsed.value, today };
-		}
-	}
-	validateBtn.disabled = true;
-	validateBtn.textContent = 'Checking…';
-	try {
-		const policy = await getPolicy(active);
-		const outcome = policy.evaluate(input);
-		const result = outcome && outcome[0] && outcome[0].result;
-		if (active === 'authz') {
-			if (!result || typeof result.decision !== 'string' || !Array.isArray(result.trace)) {
-				setStatus('The explainer returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderAuthz(result);
-			}
-		} else if (active === 'obs') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cardinalities)) {
-				setStatus('The linter returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderObs(result);
-			}
-		} else if (active === 'alerts') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.linkages)) {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderAlerts(result);
-			}
-		} else if (active === 'actions') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.scoping)) {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderActions(result);
-			}
-		} else if (active === 'erasure') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.stores) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderErasure(result);
-			}
-		} else if (active === 'segment') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.rules) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderSegment(result);
-			}
-		} else if (active === 'ingress') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderIngress(result);
-			}
-		} else if (active === 'citizen') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderCitizen(result);
-			}
-		} else if (active === 'component') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderComponent(result);
-			}
-		} else if (active === 'matrix') {
-			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.fabrics) || typeof result.verdict !== 'string') {
-				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
-			} else {
-				renderMatrix(result);
-			}
-		} else if (!result || typeof result.valid !== 'boolean') {
-			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
-		} else {
-			render(result);
-		}
-	} catch (err) {
-		setStatus('Could not run the validator: ' + err.message +
-			' — the wasm bundles in wasm/ may be missing. Run `make site` and serve site-build/.', true);
-	} finally {
-		validateBtn.disabled = false;
-		validateBtn.textContent = 'Validate';
-	}
-});
-
-exampleBtn.addEventListener('click', () => {
-	if (active === 'authz') {
-		editor('authz-request').value = JSON.stringify(examples.authzRequest, null, 2);
-		editor('authz-policyset').value = JSON.stringify(examples.authzPolicySet, null, 2);
-	} else if (active === 'obs') {
-		editor('obs-contracts').value = JSON.stringify(examples.obsContracts, null, 2);
-		editor('obs-runtime').value = JSON.stringify(examples.obsRuntime, null, 2);
-	} else if (active === 'alerts') {
-		editor('alerts-contract').value = JSON.stringify(examples.alertsContract, null, 2);
-		editor('alerts-register').value = JSON.stringify(examples.alertsRegister, null, 2);
-	} else if (active === 'actions') {
-		editor('actions-registry').value = JSON.stringify(examples.actionsRegistry, null, 2);
-		editor('actions-manifest').value = JSON.stringify(examples.actionsManifest, null, 2);
-	} else if (active === 'erasure') {
-		editor('erasure-keys').value = JSON.stringify(examples.erasureKeys, null, 2);
-		editor('erasure-case').value = JSON.stringify(examples.erasureCase, null, 2);
-	} else if (active === 'segment') {
-		editor('segment-contract').value = JSON.stringify(examples.segmentContract, null, 2);
-		editor('segment-evidence').value = JSON.stringify(examples.segmentEvidence, null, 2);
-	} else if (active === 'ingress') {
-		editor('ingress-case').value = JSON.stringify(examples.ingressCase, null, 2);
-		editor('ingress-drill').value = JSON.stringify(examples.ingressDrill, null, 2);
-	} else if (active === 'citizen') {
-		editor('citizen-manifest').value = JSON.stringify(examples.citizenManifest, null, 2);
-		editor('citizen-spec').value = JSON.stringify(examples.citizenSpec, null, 2);
-		editor('citizen-registry').value = JSON.stringify(examples.citizenRegistry, null, 2);
-	} else if (active === 'component') {
-		editor('component-package').value = JSON.stringify(examples.componentPackage, null, 2);
-		editor('component-registry').value = JSON.stringify(examples.componentRegistry, null, 2);
-	} else if (active === 'matrix') {
-		editor('matrix-package').value = JSON.stringify(examples.matrixPackage, null, 2);
-		editor('matrix-renders').value = JSON.stringify(examples.matrixRenders, null, 2);
-	} else {
-		editor(active).value = JSON.stringify(examples[active], null, 2);
-	}
-	results.style.display = 'none';
-	setStatus('', false);
-});
-
-for (const t of tabs) {
-	document.getElementById('tab-' + t.id).addEventListener('click', () => selectTab(t.id));
-}
-
-todayInput.value = new Date().toISOString().slice(0, 10);
-selectTab('enclave');
-</script>
-</body>
-</html>
