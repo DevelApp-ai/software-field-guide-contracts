@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the thirteen wasm bundles into build/wasm/
+#   make build         compile the fourteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -68,6 +68,16 @@
 #                      package manifest [COMPONENT_PACKAGE=... MATRIX=...]
 #   make matrix-demo  the done-when proof: one fabric quietly running a
 #                      different release caught citing both files
+#   make check-lifecycle validate the component lifecycle record (its
+#                      stamps, its review clock, every transition with
+#                      the evidence its type demands)
+#                      [LIFECYCLE_RECORD=...] [TODAY=YYYY-MM-DD]
+#   make lifecycle-gate gate the record against the component package
+#                      manifest by component name
+#                      [LIFECYCLE_RECORD=... COMPONENT_PACKAGE=...] [TODAY=...]
+#   make lifecycle-demo the done-when proof: a bake without its image
+#                      digest caught citing the record (runs the whole
+#                      demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -106,6 +116,7 @@ CITIZEN_REGISTRY ?= examples/citizen/guardrails.yaml
 COMPONENT_PACKAGE ?= examples/component/package.yaml
 COMPONENT_REGISTRY ?= examples/component/registry.yaml
 MATRIX ?= examples/matrix/matrix.yaml
+LIFECYCLE_RECORD ?= examples/lifecycle/lifecycle.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -119,6 +130,7 @@ MATRIX ?= examples/matrix/matrix.yaml
 	check-citizen citizen-gate citizen-demo \
 	check-component component-gate component-demo \
 	check-matrix matrix-gate matrix-demo \
+	check-lifecycle lifecycle-gate lifecycle-demo \
 	examples ci
 
 fmt:
@@ -172,6 +184,9 @@ build:
 	$(OPA) build -t wasm -e matrix/audit -o build/matrix.tar.gz policies
 	tar -xzf build/matrix.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/matrix.wasm
+	$(OPA) build -t wasm -e lifecycle/audit -o build/lifecycle.tar.gz policies
+	tar -xzf build/lifecycle.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/lifecycle.wasm
 
 site: build
 	rm -rf site-build
@@ -1154,6 +1169,133 @@ matrix-demo:
 	@echo "caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree"
 	@echo "--- matrix demo: all done-when proofs passed ---"
 
+# Validate the component lifecycle record alone — the component's
+# paper trail: versioned transitions, each carrying the evidence its
+# type demands (a bake its sha256 image digest, a patch its provenance
+# source and commit, an upgrade the date its rollback was rehearsed),
+# a review that is fresh and covers every transition on it.
+check-lifecycle:
+	@test -f "$(LIFECYCLE_RECORD)" || { echo "usage: make check-lifecycle [LIFECYCLE_RECORD=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(LIFECYCLE_RECORD)' \
+		| jq -cs --arg today "$(TODAY)" --arg lifecycleFile "$(LIFECYCLE_RECORD)" '{lifecycle: .[0], today: $$today, lifecycleFile: $$lifecycleFile}' \
+		| $(OPA) eval -d policies -I 'data.lifecycle.validate' --format=pretty | tee build/check-lifecycle.json
+	@jq -e '.valid == true' build/check-lifecycle.json > /dev/null \
+		|| { echo "check-lifecycle: the lifecycle record is not in conformance — findings above"; exit 1; }
+
+# Gate the lifecycle record against the component package manifest —
+# the join runs on the component name. Conformance gate, not advisor:
+# a record documenting a component the manifest never packaged, a
+# transition without its evidence, a review that never saw a
+# transition recorded after it, and a record nobody has re-read in a
+# year are all refused, not advised.
+lifecycle-gate:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make lifecycle-gate [LIFECYCLE_RECORD=... COMPONENT_PACKAGE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' '$(LIFECYCLE_RECORD)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" --arg lifecycleFile "$(LIFECYCLE_RECORD)" \
+			'{package: .[0], lifecycle: .[1], today: $$today, packageFile: $$packageFile, lifecycleFile: $$lifecycleFile}' \
+		| $(OPA) eval -d policies -I 'data.lifecycle.audit' --format=pretty | tee build/lifecycle-gate.json
+	@jq -e '.valid == true' build/lifecycle-gate.json > /dev/null \
+		|| { echo "lifecycle-gate: the lifecycle record is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #105: the lifecycle evidence
+# gate refuses. Runs the control record end to end, then proves
+# every broken variant bites with its named rule — three at
+# transition evidence, one after the review, one at the type stamp,
+# one at the review clock, and one at the join — and that each bite
+# renders its verdict honestly.
+lifecycle-demo:
+	@echo "--- 1. the lifecycle record validates ---"
+	@$(MAKE) check-lifecycle TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) lifecycle-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@jq -e '.transitions | length == 3' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per recorded transition"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "control verdict: consistent — one card per recorded transition, every one evidenced"
+	@echo "--- 3. a bake without its image digest is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.bake-no-digest.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-bake-no-digest.txt 2>&1; \
+		then echo "FAIL: the bake without its digest passed the gate"; cat build/lifecycle-bake-no-digest.txt; exit 1; \
+		else grep -q 'transition/bake-digest-required' build/lifecycle-bake-no-digest.txt \
+			|| { echo "FAIL: the gate failed without the digest rule"; cat build/lifecycle-bake-no-digest.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: transition/bake-digest-required — an image nobody can pin to what actually runs"
+	@echo "--- 4. a patch with no provenance is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.patch-no-provenance.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-patch-no-provenance.txt 2>&1; \
+		then echo "FAIL: the patch without provenance passed the gate"; cat build/lifecycle-patch-no-provenance.txt; exit 1; \
+		else grep -q 'transition/patch-provenance-required' build/lifecycle-patch-no-provenance.txt \
+			|| { echo "FAIL: the gate failed without the provenance rule"; cat build/lifecycle-patch-no-provenance.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: transition/patch-provenance-required — a change nobody authored"
+	@echo "--- 5. an upgrade nobody rehearsed the rollback for is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.upgrade-unrehearsed.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-upgrade-unrehearsed.txt 2>&1; \
+		then echo "FAIL: the unrehearsed upgrade passed the gate"; cat build/lifecycle-upgrade-unrehearsed.txt; exit 1; \
+		else grep -q 'transition/upgrade-rollback-required' build/lifecycle-upgrade-unrehearsed.txt \
+			|| { echo "FAIL: the gate failed without the rollback rule"; cat build/lifecycle-upgrade-unrehearsed.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: transition/upgrade-rollback-required — a way back nobody walked"
+	@echo "--- 6. a transition the review never saw is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.unreviewed-transition.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-unreviewed.txt 2>&1; \
+		then echo "FAIL: the unreviewed transition passed the gate"; cat build/lifecycle-unreviewed.txt; exit 1; \
+		else grep -q 'transition/recorded-after-review' build/lifecycle-unreviewed.txt \
+			|| { echo "FAIL: the gate failed without the review-coverage rule"; cat build/lifecycle-unreviewed.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: transition/recorded-after-review — a fact nobody re-checked"
+	@echo "--- 7. a transition whose type the gate cannot vouch for is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.type-unknown.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-type-unknown.txt 2>&1; \
+		then echo "FAIL: the unknown type passed the gate"; cat build/lifecycle-type-unknown.txt; exit 1; \
+		else grep -q 'transition/type-unknown' build/lifecycle-type-unknown.txt \
+			|| { echo "FAIL: the gate failed without the type rule"; cat build/lifecycle-type-unknown.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: transition/type-unknown — a fact this gate cannot judge"
+	@echo "--- 8. a record nobody has re-read in two years is caught ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.stale-record.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-stale.txt 2>&1; \
+		then echo "FAIL: the stale record passed the gate"; cat build/lifecycle-stale.txt; exit 1; \
+		else grep -q 'lifecycle/reviewed-stale' build/lifecycle-stale.txt \
+			|| { echo "FAIL: the gate failed without the staleness rule"; cat build/lifecycle-stale.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: lifecycle/reviewed-stale, verdict unreadable — a trail nobody still believes"
+	@echo "--- 9. a record for a component the manifest never packaged is caught at the join ---"
+	@if $(MAKE) lifecycle-gate LIFECYCLE_RECORD=examples/lifecycle/broken/lifecycle.wrong-component.yaml TODAY=$(ANCHOR_TODAY) > build/lifecycle-wrong-component.txt 2>&1; \
+		then echo "FAIL: the other component passed the gate"; cat build/lifecycle-wrong-component.txt; exit 1; \
+		else grep -q 'gate/component-mismatch' build/lifecycle-wrong-component.txt \
+			|| { echo "FAIL: the gate failed without the component rule"; cat build/lifecycle-wrong-component.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/lifecycle-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/lifecycle-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@jq -e '[.transitions[] | .verdict] | all(. == "drifts")' build/lifecycle-gate.json > /dev/null \
+		|| { echo "FAIL: the cards did not render the drift verdict"; cat build/lifecycle-gate.json; exit 1; }
+	@echo "caught as expected: gate/component-mismatch — a paper trail answering for somebody else's component"
+	@echo "--- lifecycle demo: all done-when proofs passed ---"
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -1180,7 +1322,9 @@ examples:
 	$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
 	$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-lifecycle TODAY=$(ANCHOR_TODAY)
+	$(MAKE) lifecycle-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo lifecycle-demo
 	$(OPA) fmt --fail -l policies
