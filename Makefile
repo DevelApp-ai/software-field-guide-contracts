@@ -913,3 +913,427 @@ citizen-demo:
 		|| { echo "FAIL: the variant must bite exactly once"; cat build/citizen-gate.json; exit 1; }
 	@grep -q '"verdict": "advises changes"' build/citizen-gate.json \
 		|| { echo "FAIL: the gate did not render the advises-changes verdict"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.valid == true' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: an advisory must not fail the gate"; cat build/citizen-gate.json; exit 1; }
+	@jq -e '.cards[] | select(.area == "guardrails" and .verdict == "advises")' build/citizen-gate.json > /dev/null \
+		|| { echo "FAIL: the guardrail card did not render advises"; cat build/citizen-gate.json; exit 1; }
+	@echo "advised as expected: guardrail/below-floor — the gate stays green, the advice is on the record"
+	@echo "--- 7. a manifest the advisor cannot read fails honestly ---"
+	@if $(MAKE) citizen-gate CITIZEN_MANIFEST=examples/citizen/broken/manifest.no-version.yaml TODAY=$(ANCHOR_TODAY) > build/citizen-no-version.txt 2>&1; \
+		then echo "FAIL: the unreadable manifest passed the gate"; cat build/citizen-no-version.txt; exit 1; \
+		else grep -q 'manifest/version-required' build/citizen-no-version.txt \
+			|| { echo "FAIL: the gate failed without the version rule"; cat build/citizen-no-version.txt; exit 1; }; \
+		fi
+	@grep -q '"verdict": "unreadable"' build/citizen-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/citizen-gate.json; exit 1; }
+	@echo "caught as expected: manifest/version-required — the advisor refuses to answer on a document it cannot read"
+	@echo "--- citizen demo: all done-when proofs passed ---"
+
+# Validate the component package manifest alone: the component-package
+# chapter's package-as-data — its name, version, and tier, the artifact
+# digest it publishes, the signature and attestation recorded over that
+# digest, its provenance, and the dependencies it pins by digest.
+# Conformance gate, not advisor: any finding fails.
+check-component:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make check-component [COMPONENT_PACKAGE=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" '{package: .[0], today: $$today, packageFile: $$packageFile}' \
+		| $(OPA) eval -d policies -I 'data.component.validate' --format=pretty | tee build/check-component.json
+	@jq -e '.valid == true' build/check-component.json > /dev/null \
+		|| { echo "check-component: the package manifest is not in conformance — findings above"; exit 1; }
+
+# Gate the component package against the component registry — the
+# estate's admitted packages, each as a component, version, tier, and
+# digest row. Conformance gate, not advisor: an unregistered package,
+# an artifact drifted from its registration, an unresolved
+# dependency, a stale pin, and a customer-tier package depending
+# downward are all refused, not advised.
+component-gate:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make component-gate [COMPONENT_PACKAGE=... COMPONENT_REGISTRY=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' '$(COMPONENT_REGISTRY)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" --arg registryFile "$(COMPONENT_REGISTRY)" \
+			'{package: .[0], registry: .[1], today: $$today, packageFile: $$packageFile, registryFile: $$registryFile}' \
+		| $(OPA) eval -d policies -I 'data.component.gate' --format=pretty | tee build/component-gate.json
+	@jq -e '.valid == true' build/component-gate.json > /dev/null \
+		|| { echo "component-gate: the package is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #101: the component package
+# conformance gate refuses. Runs the control package end to end,
+# then proves every drift variant bites exactly once — three at
+# validation, three at the join — and that each bite names the rule
+# and renders its verdict honestly.
+component-demo:
+	@echo "--- 1. the package manifest validates ---"
+	@$(MAKE) check-component TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/component-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/component-gate.json; exit 1; }
+	@jq -e '.cards | length == 2' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per judged item"; cat build/component-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per judged item"
+	@echo "--- 3. an unsigned artifact is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.no-signature.yaml TODAY=$(ANCHOR_TODAY) > build/component-no-signature.txt 2>&1; \
+		then echo "FAIL: the unsigned artifact passed validation"; cat build/component-no-signature.txt; exit 1; \
+		else grep -q 'signature/required' build/component-no-signature.txt \
+			|| { echo "FAIL: the gate failed without the signature rule"; cat build/component-no-signature.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: signature/required — an unsigned artifact is an artifact nobody vouches for"
+	@echo "--- 4. an inconsistent signature is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.wrong-signed-digest.yaml TODAY=$(ANCHOR_TODAY) > build/component-wrong-digest.txt 2>&1; \
+		then echo "FAIL: the mismatched signature passed validation"; cat build/component-wrong-digest.txt; exit 1; \
+		else grep -q 'signature/digest-mismatch' build/component-wrong-digest.txt \
+			|| { echo "FAIL: the gate failed without the mismatch rule"; cat build/component-wrong-digest.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: signature/digest-mismatch — the recorded evidence is not even internally consistent"
+	@echo "--- 5. a general-tier package with a dependency is caught at validation ---"
+	@if $(MAKE) check-component COMPONENT_PACKAGE=examples/component/broken/package.general-with-dependency.yaml TODAY=$(ANCHOR_TODAY) > build/component-general.txt 2>&1; \
+		then echo "FAIL: the general-tier dependency passed validation"; cat build/component-general.txt; exit 1; \
+		else grep -q 'dependency/general-forbidden' build/component-general.txt \
+			|| { echo "FAIL: the gate failed without the general-tier rule"; cat build/component-general.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: dependency/general-forbidden — the baseline everything else builds on depends on nothing"
+	@echo "--- 6. a stale pin is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_PACKAGE=examples/component/broken/package.stale-pin.yaml TODAY=$(ANCHOR_TODAY) > build/component-stale-pin.txt 2>&1; \
+		then echo "FAIL: the stale pin passed the gate"; cat build/component-stale-pin.txt; exit 1; \
+		else grep -q 'gate/dependency-digest-mismatch' build/component-stale-pin.txt \
+			|| { echo "FAIL: the gate failed without the stale-pin rule"; cat build/component-stale-pin.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/dependency-digest-mismatch — a pin to something the estate never admitted"
+	@echo "--- 7. a downward tier is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_PACKAGE=examples/component/broken/package.customer-on-project.yaml TODAY=$(ANCHOR_TODAY) > build/component-downward.txt 2>&1; \
+		then echo "FAIL: the downward tier passed the gate"; cat build/component-downward.txt; exit 1; \
+		else grep -q 'gate/dependency-hierarchy-violation' build/component-downward.txt \
+			|| { echo "FAIL: the gate failed without the hierarchy rule"; cat build/component-downward.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/dependency-hierarchy-violation — the tiers are one-way, and this dependency points down"
+	@echo "--- 8. an unregistered package is caught at the join ---"
+	@if $(MAKE) component-gate COMPONENT_REGISTRY=examples/component/broken/registry.missing-package.yaml TODAY=$(ANCHOR_TODAY) > build/component-unregistered.txt 2>&1; \
+		then echo "FAIL: the unregistered package passed the gate"; cat build/component-unregistered.txt; exit 1; \
+		else grep -q 'gate/package-unregistered' build/component-unregistered.txt \
+			|| { echo "FAIL: the gate failed without the registration rule"; cat build/component-unregistered.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/component-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/component-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/component-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/component-gate.json; exit 1; }
+	@echo "caught as expected: gate/package-unregistered — a package the estate never admitted is a package the estate never vouched for"
+	@echo "--- component demo: all done-when proofs passed ---"
+
+# Validate the render matrix alone: one component package's rendered
+# copies, fabric by fabric — the fabrics it must cover, and each
+# fabric's version, pinned digest, and the policy bindings in force.
+# Conformance gate, not advisor: any finding fails.
+check-matrix:
+	@test -f "$(MATRIX)" || { echo "usage: make check-matrix [MATRIX=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(MATRIX)' \
+		| jq -cs --arg today "$(TODAY)" --arg matrixFile "$(MATRIX)" '{matrix: .[0], today: $$today, matrixFile: $$matrixFile}' \
+		| $(OPA) eval -d policies -I 'data.matrix.validate' --format=pretty | tee build/check-matrix.json
+	@jq -e '.valid == true' build/check-matrix.json > /dev/null \
+		|| { echo "check-matrix: the render matrix is not in conformance — findings above"; exit 1; }
+
+# Gate every fabric's render against the component package manifest —
+# the same version, the same pinned digest, and the same policy
+# bindings, on every declared fabric. Conformance gate, not advisor:
+# a render for another component, a fabric with no render, a version
+# or digest disagreement, and a binding disagreement in either
+# direction are all refused, not advised.
+matrix-gate:
+	@test -f "$(COMPONENT_PACKAGE)" || { echo "usage: make matrix-gate [COMPONENT_PACKAGE=... MATRIX=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(COMPONENT_PACKAGE)' '$(MATRIX)' \
+		| jq -cs --arg today "$(TODAY)" --arg packageFile "$(COMPONENT_PACKAGE)" --arg matrixFile "$(MATRIX)" \
+			'{package: .[0], matrix: .[1], today: $$today, packageFile: $$packageFile, matrixFile: $$matrixFile}' \
+		| $(OPA) eval -d policies -I 'data.matrix.gate' --format=pretty | tee build/matrix-gate.json
+	@jq -e '.valid == true' build/matrix-gate.json > /dev/null \
+		|| { echo "matrix-gate: the fabric renders are not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #102: the render-matrix
+# conformance gate refuses. Runs the control matrix end to end,
+# then proves every drift variant bites with its named rule — six
+# at the join, one at validation, one at the fabric list — and
+# that each bite renders its verdict honestly.
+matrix-demo:
+	@echo "--- 1. the render matrix validates ---"
+	@$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/matrix-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/matrix-gate.json; exit 1; }
+	@jq -e '.fabrics | length == 3' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared fabric"; cat build/matrix-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per declared fabric"
+	@echo "--- 3. a fabric on another release is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.version-skew.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-version-skew.txt 2>&1; \
+		then echo "FAIL: the version skew passed the gate"; cat build/matrix-version-skew.txt; exit 1; \
+		else grep -q 'gate/render-version-skew' build/matrix-version-skew.txt \
+			|| { echo "FAIL: the gate failed without the version rule"; cat build/matrix-version-skew.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/render-version-skew — one fabric quietly running a different release"
+	@echo "--- 4. a re-render that swapped the artifact is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.digest-drift.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-digest-drift.txt 2>&1; \
+		then echo "FAIL: the digest drift passed the gate"; cat build/matrix-digest-drift.txt; exit 1; \
+		else grep -q 'gate/render-digest-drift' build/matrix-digest-drift.txt \
+			|| { echo "FAIL: the gate failed without the digest rule"; cat build/matrix-digest-drift.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/render-digest-drift — a digest the package never published"
+	@echo "--- 5. a declared binding two fabrics never ran is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.binding-one-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-binding-one.txt 2>&1; \
+		then echo "FAIL: the missing bindings passed the gate"; cat build/matrix-binding-one.txt; exit 1; \
+		else grep -q 'gate/binding-missing' build/matrix-binding-one.txt \
+			|| { echo "FAIL: the gate failed without the binding rule"; cat build/matrix-binding-one.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 2' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite once per fabric that never ran the policy"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/binding-missing × 2 — a policy the package shipped that two fabrics never ran"
+	@echo "--- 6. a binding the package never declared is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.extra-binding.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-extra-binding.txt 2>&1; \
+		then echo "FAIL: the undeclared binding passed the gate"; cat build/matrix-extra-binding.txt; exit 1; \
+		else grep -q 'gate/binding-undeclared' build/matrix-extra-binding.txt \
+			|| { echo "FAIL: the gate failed without the undeclared-binding rule"; cat build/matrix-extra-binding.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/binding-undeclared — a policy in force the package never shipped"
+	@echo "--- 7. a fabric with no render at all is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.fabric-unrendered.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-unrendered.txt 2>&1; \
+		then echo "FAIL: the unrendered fabric passed the gate"; cat build/matrix-unrendered.txt; exit 1; \
+		else grep -q 'gate/fabric-unrendered' build/matrix-unrendered.txt \
+			|| { echo "FAIL: the gate failed without the coverage rule"; cat build/matrix-unrendered.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/fabric-unrendered — coverage claimed and never delivered"
+	@echo "--- 8. a matrix for another component is caught at the join ---"
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.wrong-component.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-wrong-component.txt 2>&1; \
+		then echo "FAIL: the other component passed the gate"; cat build/matrix-wrong-component.txt; exit 1; \
+		else grep -q 'gate/component-mismatch' build/matrix-wrong-component.txt \
+			|| { echo "FAIL: the gate failed without the component rule"; cat build/matrix-wrong-component.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/matrix-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/matrix-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/matrix-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/matrix-gate.json; exit 1; }
+	@echo "caught as expected: gate/component-mismatch — renders judged against somebody else's package"
+	@echo "--- 9. a matrix nobody re-reads is caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-matrix MATRIX=examples/matrix/broken/matrix.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-stale-review.txt 2>&1; \
+		then echo "FAIL: the stale review passed validation"; cat build/matrix-stale-review.txt; exit 1; \
+		else grep -q 'matrix/reviewed-stale' build/matrix-stale-review.txt \
+			|| { echo "FAIL: the validator failed without the staleness rule"; cat build/matrix-stale-review.txt; exit 1; }; \
+		fi
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-stale-gate.txt 2>&1; \
+		then echo "FAIL: the stale review passed the gate"; cat build/matrix-stale-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/matrix-stale-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/matrix-stale-gate.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: matrix/reviewed-stale, verdict unreadable — a question the gate refuses to answer on stale inputs"
+	@echo "--- 10. a render on a fabric the matrix never declared is caught at validation ---"
+	@if $(MAKE) check-matrix MATRIX=examples/matrix/broken/matrix.undeclared-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-undeclared-fabric.txt 2>&1; \
+		then echo "FAIL: the undeclared fabric passed validation"; cat build/matrix-undeclared-fabric.txt; exit 1; \
+		else grep -q 'render/fabric-undeclared' build/matrix-undeclared-fabric.txt \
+			|| { echo "FAIL: the validator failed without the declared-fabric rule"; cat build/matrix-undeclared-fabric.txt; exit 1; }; \
+		fi
+	@if $(MAKE) matrix-gate MATRIX=examples/matrix/broken/matrix.undeclared-fabric.yaml TODAY=$(ANCHOR_TODAY) > build/matrix-undeclared-gate.txt 2>&1; \
+		then echo "FAIL: the undeclared fabric passed the gate"; cat build/matrix-undeclared-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/matrix-undeclared-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/matrix-undeclared-gate.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: render/fabric-undeclared, verdict unreadable — the fabric list and the render rows disagree"
+	@echo "--- matrix demo: all done-when proofs passed ---"
+
+# Validate the compliance controls manifest alone: every control
+# well-formed, every evidence citation resolving to a source the
+# manifest declares, and every review clock freshly wound.
+# Conformance gate, not advisor: any finding fails.
+check-compliance:
+	@test -f "$(CONTROLS)" || { echo "usage: make check-compliance [CONTROLS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTROLS)' \
+		| jq -cs --arg today "$(TODAY)" --arg controlsFile "$(CONTROLS)" '{controls: .[0], today: $$today, controlsFile: $$controlsFile}' \
+		| $(OPA) eval -d policies -I 'data.compliance.validate' --format=pretty | tee build/check-compliance.json
+	@jq -e '.valid == true' build/check-compliance.json > /dev/null \
+		|| { echo "check-compliance: the controls manifest is not in conformance — findings above"; exit 1; }
+
+# Gate the controls manifest against the requirements catalog: every
+# catalog requirement mapped by a sound control, every mapping onto a
+# requirement the catalog declared, every citation onto a source still
+# live, and every review clock unexpired. Conformance gate, not
+# advisor: a requirement nobody controls, compliance claimed with
+# words nobody wrote, evidence nobody collects, and a lapsed review
+# clock are all refused, not advised.
+compliance-gate:
+	@test -f "$(CONTROLS)" || { echo "usage: make compliance-gate [CONTROLS=... REQUIREMENTS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@test -f "$(REQUIREMENTS)" || { echo "usage: make compliance-gate [CONTROLS=... REQUIREMENTS=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(CONTROLS)' '$(REQUIREMENTS)' \
+		| jq -cs --arg today "$(TODAY)" --arg controlsFile "$(CONTROLS)" --arg requirementsFile "$(REQUIREMENTS)" \
+			'{controls: .[0], requirements: .[1], today: $$today, controlsFile: $$controlsFile, requirementsFile: $$requirementsFile}' \
+		| $(OPA) eval -d policies -I 'data.compliance.gate' --format=pretty | tee build/compliance-gate.json
+	@jq -e '.valid == true' build/compliance-gate.json > /dev/null \
+		|| { echo "compliance-gate: the controls are not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #107: the compliance
+# controls-as-data gate refuses. Runs the control manifest and its
+# requirements catalog end to end, then every broken variant, and
+# asserts each refusal bites where the book says it must.
+compliance-demo:
+	@echo "--- 1. the controls manifest validates ---"
+	@$(MAKE) check-compliance TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. every catalog requirement lands on a control with live evidence ---"
+	@$(MAKE) compliance-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/compliance-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/compliance-gate.json; exit 1; }
+	@jq -e '.requirements | length == 4' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared requirement"; cat build/compliance-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per declared requirement"
+	@echo "--- 3. a control citing evidence the manifest retired is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.evidence-dead.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-evidence-dead.txt 2>&1; \
+		then echo "FAIL: the retired evidence passed the gate"; cat build/compliance-evidence-dead.txt; exit 1; \
+		else grep -q 'gate/evidence-dead' build/compliance-evidence-dead.txt \
+			|| { echo "FAIL: the gate failed without the evidence rule"; cat build/compliance-evidence-dead.txt; exit 1; }; \
+	fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/evidence-dead — a control pointing at evidence nobody collects"
+	@echo "--- 4. a control whose review clock lapsed is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.review-expired.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-review-expired.txt 2>&1; \
+		then echo "FAIL: the lapsed clock passed the gate"; cat build/compliance-review-expired.txt; exit 1; \
+		else grep -q 'gate/review-expired' build/compliance-review-expired.txt \
+			|| { echo "FAIL: the gate failed without the review rule"; cat build/compliance-review-expired.txt; exit 1; }; \
+	fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/review-expired — a control whose promised clock ran out"
+	@echo "--- 5. a control mapping onto a requirement the catalog never declared is caught at the join ---"
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.requirement-unknown.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-requirement-unknown.txt 2>&1; \
+		then echo "FAIL: the unknown requirement passed the gate"; cat build/compliance-requirement-unknown.txt; exit 1; \
+		else grep -q 'gate/requirement-unknown' build/compliance-requirement-unknown.txt \
+			|| { echo "FAIL: the gate failed without the unknown-requirement rule"; cat build/compliance-requirement-unknown.txt; exit 1; }; \
+	fi
+	@jq -e '[.findings[]] | length == 2' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly twice: the unknown requirement, plus the PCI requirement the broken control can no longer vouch for"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/requirement-unknown × 2 — compliance claimed with words nobody wrote"
+	@echo "--- 6. a requirement no control maps to is caught at the join ---"
+	@if $(MAKE) compliance-gate REQUIREMENTS=examples/compliance/broken/requirements.unmapped.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-unmapped.txt 2>&1; \
+		then echo "FAIL: the unmapped requirement passed the gate"; cat build/compliance-unmapped.txt; exit 1; \
+		else grep -q 'gate/requirement-unmapped' build/compliance-unmapped.txt \
+			|| { echo "FAIL: the gate failed without the unmapped rule"; cat build/compliance-unmapped.txt; exit 1; }; \
+	fi
+	@jq -e '[.findings[]] | length == 1' build/compliance-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/compliance-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/compliance-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/compliance-gate.json; exit 1; }
+	@echo "caught as expected: gate/requirement-unmapped — a requirement nobody controls, a promise nobody keeps"
+	@echo "--- 7. a control without an evidence source is caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-compliance CONTROLS=examples/compliance/broken/controls.no-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-evidence.txt 2>&1; \
+		then echo "FAIL: the evidence-less control passed validation"; cat build/compliance-no-evidence.txt; exit 1; \
+		else grep -q 'control/evidence-required' build/compliance-no-evidence.txt \
+			|| { echo "FAIL: the validator failed without the evidence rule"; cat build/compliance-no-evidence.txt; exit 1; }; \
+	fi
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.no-evidence.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-evidence-gate.txt 2>&1; \
+		then echo "FAIL: the evidence-less control passed the gate"; cat build/compliance-no-evidence-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/compliance-no-evidence-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-no-evidence-gate.txt; exit 1; }; \
+	fi
+	@echo "caught as expected: control/evidence-required, verdict unreadable — an assertion without evidence is not a control"
+	@echo "--- 8. a manifest nobody re-reads is caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-compliance CONTROLS=examples/compliance/broken/controls.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-stale-review.txt 2>&1; \
+		then echo "FAIL: the stale review passed validation"; cat build/compliance-stale-review.txt; exit 1; \
+		else grep -q 'controls/reviewed-stale' build/compliance-stale-review.txt \
+			|| { echo "FAIL: the validator failed without the staleness rule"; cat build/compliance-stale-review.txt; exit 1; }; \
+	fi
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.stale-review.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-stale-gate.txt 2>&1; \
+		then echo "FAIL: the stale review passed the gate"; cat build/compliance-stale-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/compliance-stale-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-stale-gate.txt; exit 1; }; \
+	fi
+	@echo "caught as expected: controls/reviewed-stale, verdict unreadable — a map of an estate that no longer exists"
+	@echo "--- 9. two controls sharing one id are caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-compliance CONTROLS=examples/compliance/broken/controls.duplicate-id.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-duplicate-id.txt 2>&1; \
+		then echo "FAIL: the duplicate id passed validation"; cat build/compliance-duplicate-id.txt; exit 1; \
+		else grep -q 'control/id-duplicate' build/compliance-duplicate-id.txt \
+			|| { echo "FAIL: the validator failed without the duplicate rule"; cat build/compliance-duplicate-id.txt; exit 1; }; \
+	fi
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.duplicate-id.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-duplicate-gate.txt 2>&1; \
+		then echo "FAIL: the duplicate id passed the gate"; cat build/compliance-duplicate-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/compliance-duplicate-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-duplicate-gate.txt; exit 1; }; \
+	fi
+	@echo "caught as expected: control/id-duplicate, verdict unreadable — a finding against CTRL-04 is a finding against who-knows-what"
+	@echo "--- 10. a control mapping onto nothing is caught at validation, and the gate refuses to answer ---"
+	@if $(MAKE) check-compliance CONTROLS=examples/compliance/broken/controls.no-requirements.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-requirements.txt 2>&1; \
+		then echo "FAIL: the unmapped control passed validation"; cat build/compliance-no-requirements.txt; exit 1; \
+		else grep -q 'control/requirements-required' build/compliance-no-requirements.txt \
+			|| { echo "FAIL: the validator failed without the mapping rule"; cat build/compliance-no-requirements.txt; exit 1; }; \
+	fi
+	@if $(MAKE) compliance-gate CONTROLS=examples/compliance/broken/controls.no-requirements.yaml TODAY=$(ANCHOR_TODAY) > build/compliance-no-req-gate.txt 2>&1; \
+		then echo "FAIL: the unmapped control passed the gate"; cat build/compliance-no-req-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/compliance-no-req-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/compliance-no-req-gate.txt; exit 1; }; \
+	fi
+	@echo "caught as expected: control/requirements-required, verdict unreadable — work nobody asked for"
+	@echo "--- compliance demo: all done-when proofs passed ---"
+
+# Validate every shipped example against the CI anchor date.
+examples:
+	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-enclave FILE=examples/enclaves/payments.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-seam FILE=examples/seams/checkout-web-tier.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-seam FILE=examples/seams/payments-3ds-redirect.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-bundle FILE=examples/bundle.yaml
+	$(MAKE) check-authz FILE=examples/authz/storefront.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-obs TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-alerts TODAY=$(ANCHOR_TODAY)
+	$(MAKE) alerts-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-actions TODAY=$(ANCHOR_TODAY)
+	$(MAKE) actions-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-erasure TODAY=$(ANCHOR_TODAY)
+	$(MAKE) erasure-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) erasure-gate ERASURE_CASE=examples/erasure/case-pending.yaml TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-segment TODAY=$(ANCHOR_TODAY)
+	$(MAKE) segment-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-ingress TODAY=$(ANCHOR_TODAY)
+	$(MAKE) ingress-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-citizen TODAY=$(ANCHOR_TODAY)
+	$(MAKE) citizen-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-component TODAY=$(ANCHOR_TODAY)
+	$(MAKE) component-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-matrix TODAY=$(ANCHOR_TODAY)
+	$(MAKE) matrix-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-compliance TODAY=$(ANCHOR_TODAY)
+	$(MAKE) compliance-gate TODAY=$(ANCHOR_TODAY)
+
+# Everything CI runs, in order.
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo compliance-demo
+	$(OPA) fmt --fail -l policies

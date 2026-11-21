@@ -1456,3 +1456,254 @@ validateBtn.addEventListener('click', async () => {
 			rendersFile: 'segment-renders.yaml',
 			flowsFile: 'flows.yaml',
 		};
+	} else if (active === 'ingress') {
+		const postureCase = parseEditor('ingress-case');
+		const drill = parseEditor('ingress-drill');
+		if (postureCase.error) {
+			setStatus('Ingress posture case: ' + postureCase.error, true);
+			return;
+		}
+		if (drill.error) {
+			setStatus('Drill record: ' + drill.error, true);
+			return;
+		}
+		input = {
+			case: postureCase.value,
+			drill: drill.value,
+			today: '2026-10-20',
+			caseFile: 'ingress-case.yaml',
+			drillFile: 'drill.yaml',
+		};
+	} else if (active === 'citizen') {
+		const manifest = parseEditor('citizen-manifest');
+		const spec = parseEditor('citizen-spec');
+		const registry = parseEditor('citizen-registry');
+		if (manifest.error) {
+			setStatus('Citizen app manifest: ' + manifest.error, true);
+			return;
+		}
+		if (spec.error) {
+			setStatus('App spec: ' + spec.error, true);
+			return;
+		}
+		if (registry.error) {
+			setStatus('Platform guardrail registry: ' + registry.error, true);
+			return;
+		}
+		input = {
+			manifest: manifest.value,
+			spec: spec.value,
+			registry: registry.value,
+			today: '2026-10-20',
+			manifestFile: 'manifest.yaml',
+			specFile: 'spec.yaml',
+			registryFile: 'guardrails.yaml',
+		};
+	} else if (active === 'component') {
+		const pkg = parseEditor('component-package');
+		const registry = parseEditor('component-registry');
+		if (pkg.error) {
+			setStatus('Component package manifest: ' + pkg.error, true);
+			return;
+		}
+		if (registry.error) {
+			setStatus('Component registry: ' + registry.error, true);
+			return;
+		}
+		input = {
+			package: pkg.value,
+			registry: registry.value,
+			today: '2026-10-20',
+			packageFile: 'package.yaml',
+			registryFile: 'registry.yaml',
+		};
+	} else if (active === 'matrix') {
+		const pkg = parseEditor('matrix-package');
+		const matrix = parseEditor('matrix-renders');
+		if (pkg.error) {
+			setStatus('Component package manifest: ' + pkg.error, true);
+			return;
+		}
+		if (matrix.error) {
+			setStatus('Render matrix: ' + matrix.error, true);
+			return;
+		}
+		input = {
+			package: pkg.value,
+			matrix: matrix.value,
+			today: '2026-10-20',
+			packageFile: 'package.yaml',
+			matrixFile: 'matrix.yaml',
+		};
+	} else if (active === 'compliance') {
+		const controls = parseEditor('compliance-controls');
+		const requirements = parseEditor('compliance-requirements');
+		if (controls.error) {
+			setStatus('Controls manifest: ' + controls.error, true);
+			return;
+		}
+		if (requirements.error) {
+			setStatus('Requirements catalog: ' + requirements.error, true);
+			return;
+		}
+		input = {
+			controls: controls.value,
+			requirements: requirements.value,
+			today: '2026-10-20',
+			controlsFile: 'controls.yaml',
+			requirementsFile: 'requirements.yaml',
+		};
+	} else {
+		const parsed = parseEditor(active);
+		if (parsed.error) {
+			setStatus(parsed.error, true);
+			return;
+		}
+		if (active === 'bundle') {
+			input = parsed.value;
+		} else {
+			const today = todayInput.value;
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+				setStatus('Pick the date to validate against (YYYY-MM-DD).', true);
+				return;
+			}
+			input = { contract: parsed.value, today };
+		}
+	}
+	validateBtn.disabled = true;
+	validateBtn.textContent = 'Checking…';
+	try {
+		const policy = await getPolicy(active);
+		const outcome = policy.evaluate(input);
+		const result = outcome && outcome[0] && outcome[0].result;
+		if (active === 'authz') {
+			if (!result || typeof result.decision !== 'string' || !Array.isArray(result.trace)) {
+				setStatus('The explainer returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderAuthz(result);
+			}
+		} else if (active === 'obs') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cardinalities)) {
+				setStatus('The linter returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderObs(result);
+			}
+		} else if (active === 'alerts') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.linkages)) {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderAlerts(result);
+			}
+		} else if (active === 'actions') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.scoping)) {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderActions(result);
+			}
+		} else if (active === 'erasure') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.stores) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderErasure(result);
+			}
+		} else if (active === 'segment') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.rules) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderSegment(result);
+			}
+		} else if (active === 'ingress') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderIngress(result);
+			}
+		} else if (active === 'citizen') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderCitizen(result);
+			}
+		} else if (active === 'component') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderComponent(result);
+			}
+		} else if (active === 'matrix') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.fabrics) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderMatrix(result);
+			}
+		} else if (active === 'compliance') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.requirements) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderCompliance(result);
+			}
+		} else if (!result || typeof result.valid !== 'boolean') {
+			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
+		} else {
+			render(result);
+		}
+	} catch (err) {
+		setStatus('Could not run the validator: ' + err.message +
+			' — the wasm bundles in wasm/ may be missing. Run `make site` and serve site-build/.', true);
+	} finally {
+		validateBtn.disabled = false;
+		validateBtn.textContent = 'Validate';
+	}
+});
+
+exampleBtn.addEventListener('click', () => {
+	if (active === 'authz') {
+		editor('authz-request').value = JSON.stringify(examples.authzRequest, null, 2);
+		editor('authz-policyset').value = JSON.stringify(examples.authzPolicySet, null, 2);
+	} else if (active === 'obs') {
+		editor('obs-contracts').value = JSON.stringify(examples.obsContracts, null, 2);
+		editor('obs-runtime').value = JSON.stringify(examples.obsRuntime, null, 2);
+	} else if (active === 'alerts') {
+		editor('alerts-contract').value = JSON.stringify(examples.alertsContract, null, 2);
+		editor('alerts-register').value = JSON.stringify(examples.alertsRegister, null, 2);
+	} else if (active === 'actions') {
+		editor('actions-registry').value = JSON.stringify(examples.actionsRegistry, null, 2);
+		editor('actions-manifest').value = JSON.stringify(examples.actionsManifest, null, 2);
+	} else if (active === 'erasure') {
+		editor('erasure-keys').value = JSON.stringify(examples.erasureKeys, null, 2);
+		editor('erasure-case').value = JSON.stringify(examples.erasureCase, null, 2);
+	} else if (active === 'segment') {
+		editor('segment-contract').value = JSON.stringify(examples.segmentContract, null, 2);
+		editor('segment-evidence').value = JSON.stringify(examples.segmentEvidence, null, 2);
+	} else if (active === 'ingress') {
+		editor('ingress-case').value = JSON.stringify(examples.ingressCase, null, 2);
+		editor('ingress-drill').value = JSON.stringify(examples.ingressDrill, null, 2);
+	} else if (active === 'citizen') {
+		editor('citizen-manifest').value = JSON.stringify(examples.citizenManifest, null, 2);
+		editor('citizen-spec').value = JSON.stringify(examples.citizenSpec, null, 2);
+		editor('citizen-registry').value = JSON.stringify(examples.citizenRegistry, null, 2);
+	} else if (active === 'component') {
+		editor('component-package').value = JSON.stringify(examples.componentPackage, null, 2);
+		editor('component-registry').value = JSON.stringify(examples.componentRegistry, null, 2);
+	} else if (active === 'matrix') {
+		editor('matrix-package').value = JSON.stringify(examples.matrixPackage, null, 2);
+		editor('matrix-renders').value = JSON.stringify(examples.matrixRenders, null, 2);
+	} else if (active === 'compliance') {
+		editor('compliance-controls').value = JSON.stringify(examples.complianceControls, null, 2);
+		editor('compliance-requirements').value = JSON.stringify(examples.complianceRequirements, null, 2);
+	} else {
+		editor(active).value = JSON.stringify(examples[active], null, 2);
+	}
+	results.style.display = 'none';
+	setStatus('', false);
+});
+
+for (const t of tabs) {
+	document.getElementById('tab-' + t.id).addEventListener('click', () => selectTab(t.id));
+}
+
+todayInput.value = new Date().toISOString().slice(0, 10);
+selectTab('enclave');
+</script>
+</body>
+</html>
