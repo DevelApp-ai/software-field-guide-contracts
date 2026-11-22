@@ -1,0 +1,46 @@
+# Broken variant — grant/expires-in-past (book issue #104).
+#
+# The storefront build's pull grant expired on 2026-10-01,
+# before the CI anchor date: an expired grant still on the
+# books is a grant the broker never revoked. The gate refuses
+# it with grant/expires-in-past — the card still renders, and
+# names the clock.
+#
+# The document is the control (examples/broker/grants.yaml) with
+# exactly one grant changed; every broken variant in this
+# directory bites with exactly one finding.
+
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The consumer identities the broker declares — the identities a
+# grant may name. A grant naming an undeclared principal is
+# refused: an identity the broker never declared is a principal
+# nobody granted.
+principals:
+  - storefront-build
+  - payments-build
+
+grants:
+  # The storefront build consumes the checkout package: pull only,
+  # pinned to the digest the package publishes, until the end of
+  # the quarter the review covers.
+  - principal: storefront-build
+    component: payments-checkout
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    actions:
+      - pull
+    expires: 2026-10-01
+
+  # The payments build consumes the platform baseline the checkout
+  # package pins as its dependency: pull and attest, pinned to the
+  # digested dependency, until the platform team's next review.
+  - principal: payments-build
+    component: platform-baseline
+    digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+    actions:
+      - pull
+      - attest
+    expires: 2027-01-31

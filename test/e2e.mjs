@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the fifteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the sixteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -226,6 +226,7 @@ const componentPolicy = await load('component')
 const matrixPolicy = await load('matrix')
 const policyPolicy = await load('policy')
 const compliancePolicy = await load('compliance')
+const brokerPolicy = await load('broker')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1684,4 +1685,100 @@ assert(
 	'a controls manifest nobody re-reads fails honestly in wasm',
 )
 
+
+// --- broker ----------------------------------------------------------------
+//
+// Judged by the composed broker/audit entrypoint — the control
+// grants pass with one card per issued grant, and every seeded
+// scope failure is refused (a conformance gate, not an advisor:
+// the grants are not believed until the manifest vouches for every
+// one at exactly its pinned digest, for a declared principal, with
+// an exact action set and the clock still on it).
+
+const brokerGrants = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	principals: ['storefront-build', 'payments-build'],
+	grants: [
+		{
+			principal: 'storefront-build',
+			component: 'payments-checkout',
+			digest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c',
+			actions: ['pull'],
+			expires: '2026-12-31',
+		},
+		{
+			principal: 'payments-build',
+			component: 'platform-baseline',
+			digest: 'd6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44',
+			actions: ['pull', 'attest'],
+			expires: '2027-01-31',
+		},
+	],
+}
+
+const brokerAudit = (extra) => brokerPolicy.evaluate({
+	broker: brokerGrants,
+	package: componentPackage,
+	today,
+	brokerFile: 'grants.yaml',
+	packageFile: 'package.yaml',
+	...extra,
+})[0].result
+
+r = brokerAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.grants.length === 2,
+	'the broker control passes the audit in wasm with one card per issued grant',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, component: 'storefront-theme' } : g) } })
+assert(
+	hasFinding(r, 'gate/component-unresolved') && r.valid === false && r.verdict === 'drifts',
+	'a grant for a component the manifest never named is refused in wasm',
+)
+assert(
+	r.grants.some((c) => c.principal === 'storefront-build' && c.verdict === 'drifts'),
+	'the unresolved grant card renders drifts in wasm',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, digest: 'a75f47bd3c7d7f1bcaf4a76a163ed589b5f26708b44996a37ee7f789e9c31c15' } : g) } })
+assert(
+	hasFinding(r, 'gate/digest-drift') && r.valid === false && r.verdict === 'drifts',
+	'a grant pinned at a digest the package never published is refused in wasm',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, actions: ['*'] } : g) } })
+assert(
+	hasFinding(r, 'grant/action-wildcard') && r.valid === false && r.verdict === 'unreadable',
+	'a wildcard grant is refused in wasm',
+)
+assert(
+	r.grants.some((c) => c.principal === 'storefront-build' && c.verdict === 'drifts'),
+	'the wildcard grant card renders drifts in wasm',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, actions: ['pull*'] } : g) } })
+assert(
+	hasFinding(r, 'grant/action-glob') && r.valid === false && r.verdict === 'unreadable',
+	'a metacharacter action is refused in wasm',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, expires: '2026-10-01' } : g) } })
+assert(
+	hasFinding(r, 'grant/expires-in-past') && r.valid === false && r.verdict === 'unreadable',
+	'an expired grant still on the books is refused in wasm',
+)
+assert(
+	r.grants.some((c) => c.principal === 'storefront-build' && c.verdict === 'drifts')
+		&& r.grants.some((c) => c.principal === 'payments-build' && c.verdict === 'consistent'),
+	'the expired grant card renders drifts, the live card stays consistent, in wasm',
+)
+
+r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g) => g.principal === 'storefront-build' ? { ...g, principal: 'quarantine-scanner' } : g) } })
+assert(
+	hasFinding(r, 'grant/principal-undeclared') && r.valid === false && r.verdict === 'unreadable',
+	'an identity the broker never declared is refused in wasm',
+)
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
