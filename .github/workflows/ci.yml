@@ -79,6 +79,12 @@ jobs:
       - name: Render-matrix consistency demo
         run: make matrix-demo
 
+      - name: Policy component validation demo
+        run: make policy-demo
+
+      - name: Compliance controls demo
+        run: make compliance-demo
+
       - name: IAM-broker scope demo
         run: make broker-demo
 

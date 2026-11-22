@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the fourteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the sixteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -224,6 +224,8 @@ const ingressPolicy = await load('ingress')
 const citizenPolicy = await load('citizen')
 const componentPolicy = await load('component')
 const matrixPolicy = await load('matrix')
+const policyPolicy = await load('policy')
+const compliancePolicy = await load('compliance')
 const brokerPolicy = await load('broker')
 
 const enclavePolicy = await load('enclave')
@@ -1471,6 +1473,218 @@ assert(
 	'a matrix nobody re-reads fails honestly in wasm',
 )
 
+// --- policy ----------------------------------------------------------------
+//
+// Judged by the composed policy/audit entrypoint — the control
+// renders consistent with one card per bound policy, and every
+// seeded drift is refused (a conformance gate, not an advisor: the
+// same catalog backs many packages, and no row is a drift by
+// inventory).
+
+const policyCatalog = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	policies: [
+		{
+			policy: 'pci-scan',
+			version: '3.2.0',
+			digest: 'b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324',
+			signature: { keyId: 'key-2026-q4', signedDigest: 'b09dcc492429e5e410c918a3d27911639f00759d86cd5d87612a23e15e11c324' },
+			posture: 'enforce',
+			path: '/policies/pci-scan.rego',
+		},
+		{
+			policy: 'tier-egress',
+			version: '1.1.0',
+			digest: '54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc',
+			signature: { keyId: 'key-2026-q4', signedDigest: '54e34a23f2c451616380d3c5432537f6e7d3df96a88e3361cc2b9674f5c289fc' },
+			posture: 'enforce',
+			path: '/policies/tier-egress.rego',
+		},
+		{
+			policy: 'allowed-regions',
+			version: '1.0.3',
+			digest: 'd52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480',
+			signature: { keyId: 'key-2026-q4', signedDigest: 'd52c2699e01724cc10fa923fc03b0880698070aa87db78bcb7c77100fe306480' },
+			posture: 'audit',
+			path: '/policies/allowed-regions.rego',
+		},
+	],
+}
+
+const policyPackage = {
+	...componentPackage,
+	policyBindings: [
+		{ policy: 'pci-scan', path: '/policies/pci-scan.rego' },
+		{ policy: 'tier-egress', path: '/policies/tier-egress.rego' },
+	],
+}
+
+const policyAudit = (extra) => policyPolicy.evaluate({
+	catalog: policyCatalog,
+	package: policyPackage,
+	today,
+	catalogFile: 'catalog.yaml',
+	packageFile: 'package.yaml',
+	...extra,
+})[0].result
+
+r = policyAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.policies.length === 2,
+	'the policy control passes the audit in wasm and renders consistent',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.filter((x) => x.policy !== 'tier-egress') } })
+assert(
+	hasFinding(r, 'gate/policy-unresolved') && r.valid === false && r.verdict === 'drifts',
+	'a binding to a policy the catalog never declared is refused in wasm',
+)
+assert(
+	r.policies.some((c) => c.policy === 'tier-egress' && c.verdict === 'drifts'),
+	'the unresolved-binding card renders drifts in wasm',
+)
+
+r = policyAudit({ package: { ...policyPackage, policyBindings: [{ policy: 'pci-scan', path: '/policies/pci-scan.rego' }, { policy: 'tier-egress', path: '/policies/tier-egress-v2.rego' }] } })
+assert(
+	hasFinding(r, 'gate/binding-path-drift') && r.valid === false && r.verdict === 'drifts',
+	'a binding rendered at a path the catalog never named is refused in wasm',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.map((x) => x.policy === 'pci-scan' ? { ...x, path: '/policies/pci-*.rego' } : x) } })
+assert(
+	hasFinding(r, 'policy/path-glob') && r.valid === false && r.verdict === 'unreadable',
+	'a glob-shaped catalog path fails honestly in wasm',
+)
+
+r = policyAudit({ catalog: { ...policyCatalog, policies: policyCatalog.policies.map((x) => x.policy === 'pci-scan' ? { ...x, signature: undefined } : x) } })
+assert(
+	hasFinding(r, 'policy/signature-required') && r.valid === false && r.verdict === 'unreadable',
+	'an unsigned policy component fails honestly in wasm',
+)
+
+r = policyAudit({ package: { ...policyPackage, policyBindings: [{ policy: 'pci-scan', path: '/policies/pci-*.rego' }, { policy: 'tier-egress', path: '/policies/tier-egress.rego' }] } })
+assert(
+	hasFinding(r, 'package/binding-path-glob') && r.valid === false && r.verdict === 'unreadable',
+	'a glob-shaped package binding fails honestly in wasm',
+)
+
+// --- compliance -----------------------------------------------------------
+
+const complianceControls = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform team',
+	evidenceSources: [
+		{ id: 'edge-firewall-review', kind: 'review record', status: 'live' },
+		{ id: 'encryption-config-scan', kind: 'scanner output', status: 'live' },
+		{ id: 'edge-access-logs', kind: 'log store', status: 'live' },
+		{ id: 'erasure-case-registry', kind: 'case registry', status: 'live' },
+	],
+	controls: [
+		{
+			id: 'CTRL-01',
+			title: 'Edge firewall rule set reviewed and re-approved quarterly',
+			owner: 'Platform team',
+			requirements: ['PCI-DSS-2.2.7'],
+			evidenceSource: 'edge-firewall-review',
+			reviewedOn: '2026-09-15',
+			intervalDays: 180,
+		},
+		{
+			id: 'CTRL-02',
+			title: 'Data-at-rest encryption verified by the nightly config scan',
+			owner: 'Storefront team',
+			requirements: ['PCI-DSS-3.4.1'],
+			evidenceSource: 'encryption-config-scan',
+			reviewedOn: '2026-10-10',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-03',
+			title: 'Edge access restricted to authenticated identities',
+			owner: 'Platform team',
+			requirements: ['SOC2-CC6.1'],
+			evidenceSource: 'edge-access-logs',
+			reviewedOn: '2026-10-05',
+			intervalDays: 90,
+		},
+		{
+			id: 'CTRL-04',
+			title: 'Erasure cases closed inside the thirty-day window',
+			owner: 'Platform team',
+			requirements: ['GDPR-ART-17'],
+			evidenceSource: 'erasure-case-registry',
+			reviewedOn: '2026-07-01',
+			intervalDays: 180,
+		},
+	],
+}
+
+const complianceRequirements = {
+	version: 1,
+	reviewedOn: '2026-10-01',
+	owner: 'Compliance team',
+	requirements: [
+		{ id: 'PCI-DSS-2.2.7', title: 'Firewall and router rule sets are reviewed and re-approved at least every six months', source: 'PCI DSS v4.0' },
+		{ id: 'PCI-DSS-3.4.1', title: 'Cardholder data is rendered unreadable wherever it is stored', source: 'PCI DSS v4.0' },
+		{ id: 'SOC2-CC6.1', title: 'Logical access to infrastructure is restricted to authorized users', source: 'SOC 2 Type II, CC6.1' },
+		{ id: 'GDPR-ART-17', title: 'Personal data is erased within thirty days of a verified erasure request', source: 'GDPR art. 17' },
+	],
+}
+
+const complianceAudit = (extra) => compliancePolicy.evaluate({
+	controls: complianceControls,
+	requirements: complianceRequirements,
+	today,
+	controlsFile: 'controls.yaml',
+	requirementsFile: 'requirements.yaml',
+	...extra,
+})[0].result
+
+r = complianceAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.requirements.length === 4,
+	'the compliance control pair passes the audit in wasm and renders consistent',
+)
+
+r = complianceAudit({ requirements: { ...complianceRequirements, requirements: [...complianceRequirements.requirements, { id: 'ISO-27001-A.5.1', title: 'Access rights are subject to an access control policy', source: 'ISO/IEC 27001 A.5.1' }] } })
+assert(
+	hasFinding(r, 'gate/requirement-unmapped') && r.valid === false && r.verdict === 'drifts',
+	'a requirement nobody controls is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, evidenceSources: complianceControls.evidenceSources.map((s) => s.id === 'encryption-config-scan' ? { ...s, status: 'retired' } : s) } })
+assert(
+	hasFinding(r, 'gate/evidence-dead') && r.valid === false && r.verdict === 'drifts',
+	'a control citing retired evidence is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-04' ? { ...c, reviewedOn: '2026-08-15', intervalDays: 30 } : c) } })
+assert(
+	hasFinding(r, 'gate/review-expired') && r.valid === false && r.verdict === 'drifts',
+	'a control whose review clock lapsed is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-02' ? { ...c, requirements: ['ISO-27001-A.5.1'] } : c) } })
+assert(
+	hasFinding(r, 'gate/requirement-unknown') && r.valid === false && r.verdict === 'drifts',
+	'a control mapping onto a requirement nobody wrote is refused in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, controls: complianceControls.controls.map((c) => c.id === 'CTRL-02' ? { ...c, evidenceSource: undefined } : c) } })
+assert(
+	hasFinding(r, 'control/evidence-required') && r.valid === false && r.verdict === 'unreadable',
+	'a control without evidence fails honestly in wasm',
+)
+
+r = complianceAudit({ controls: { ...complianceControls, reviewedOn: '2025-09-15' } })
+assert(
+	hasFinding(r, 'controls/reviewed-stale') && r.valid === false && r.verdict === 'unreadable',
+	'a controls manifest nobody re-reads fails honestly in wasm',
+)
+
 
 // --- broker ----------------------------------------------------------------
 //
@@ -1567,5 +1781,4 @@ assert(
 	hasFinding(r, 'grant/principal-undeclared') && r.valid === false && r.verdict === 'unreadable',
 	'an identity the broker never declared is refused in wasm',
 )
-
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
