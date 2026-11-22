@@ -1,0 +1,30 @@
+# Broken lifecycle variant: a patch with no provenance
+#
+# Seeded from examples/lifecycle/lifecycle.yaml by deleting the patch's provenance: the gate reports transition/patch-provenance-required once, verdict unreadable.
+# The gate refuses it with exactly one finding.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Payments team
+# The component this record tracks — the join runs on this name.
+component: payments-checkout
+# The versioned transitions, in the order they were recorded. Each
+# row names its type (bake, patch, upgrade) and the date it was
+# recorded on or before the review, and carries the evidence its type
+# demands.
+transitions:
+  # The bake: the image that produced release 1.4.0, pinned by the
+  # same sha256 digest the package manifest publishes.
+  - type: bake
+    recordedOn: 2026-09-30
+    imageDigest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+  # The patch: the fix folded in after the bake, with its provenance
+  # — where the change came from, and the commit that built it.
+  - type: patch
+    recordedOn: 2026-10-08
+  # The upgrade: the rollout that replaced the running release,
+  # having rehearsed the way back the day before it was recorded.
+  - type: upgrade
+    recordedOn: 2026-10-15
+    rollback:
+      rehearsedOn: 2026-10-14
