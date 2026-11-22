@@ -28,6 +28,7 @@ And it implements the **compliance controls-as-data gate** from [book issue #107
 
 And it implements the **supply-chain IAM-broker scope gate** from [book issue #104](https://github.com/DevelApp-ai/software-field-guide/issues/104): the broker's grants as data — every grant naming one declared consumer principal, one component pinned by sha256 digest, an exact allowed action set, and an expiry — judged at the broker gate against the component package manifest (the component gate's word, book issue #101). A wildcard or glob action, a principal the broker never declared, a component the manifest neither packages nor pins, a grant pinned at a digest the package never published, and an expired grant still on the books are all refused — minimality is a judgment the estate makes, not a hope, and the grants are not believed until the manifest vouches for every one.
 And it implements the **component lifecycle evidence gate** from [book issue #105](https://github.com/DevelApp-ai/software-field-guide/issues/105): the component's paper trail as data — versioned transitions, each carrying the evidence its type demands (the bake's sha256 image digest, the patch's provenance source and commit, the upgrade's rehearsed rollback) — judged against the component package manifest, joined by name. A bake without its digest, a patch nobody authored, an upgrade nobody rehearsed the way back for, a transition the record's review never saw, a record nobody has re-read in a year, and a trail answering for somebody else's component: all refused. A transition recorded once and never refreshed is a question, not a fact.
+And it implements the **data contract conformance validator** from [book issue #106](https://github.com/DevelApp-ai/software-field-guide/issues/106): the data contract as data — the dataset it speaks for, the schema that binds it, the freshness SLA and quality thresholds it promises, the owner and the consumers who rely on it, the checks that enforce it in CI, and the change methodology the consumers negotiate against — judged first alone, then against its enforcement record. An unenforced contract, a freshness clause with no SLA, an unversioned promise: refused before the record is even read. And the record is held to the contract: evidence for a dataset the contract never names, a declared check that never ran, a run of a check nobody declared: all refused — a conformance gate, not an advisor, and the contract is not believed until the enforcement record backs it. The validator is honest about what it models: it checks the contract's own completeness — every clause present, internally consistent, and datable — not that enforcement actually ran while CI was trusted, and not that the schema matches the data.
 Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compiled from the same source:
 
 | Entry point | Judges | Input |
@@ -79,10 +80,13 @@ Everything is [Open Policy Agent](https://www.openpolicyagent.org/) Rego, compil
 | `lifecycle/validate` | one component lifecycle record alone | `{"lifecycle": {...}, "today": "YYYY-MM-DD"}` |
 | `lifecycle/gate` | the lifecycle record against the component package manifest | `{"lifecycle": {...}, "package": {...}, "today": "YYYY-MM-DD"}` |
 | `lifecycle/audit` | all of it at once — one verdict, the transition cards | the superset of the above |
+| `datacontract/validate` | one data contract alone | `{"contract": {...}, "today": "YYYY-MM-DD"}` |
+| `datacontract/gate` | the enforcement record against the contract | `{"contract": {...}, "enforcement": {...}, "today": "YYYY-MM-DD"}` |
+| `datacontract/audit` | all of it at once — one verdict, the check cards | the superset of the above |
 
 The same policies run in CI (native OPA), on the command line, and in the browser playground (compiled to WebAssembly) — one source of truth, no drift between what CI accepts and what the playground says.
 
-Status: **v1.1** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, the component package conformance validator, the render-matrix consistency gate, the policy-component validation gate, the compliance controls-as-data gate, the supply-chain IAM-broker scope gate, and the component lifecycle evidence gate work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
+Status: **v1.1** — the estate/seam formats, the authorization compiler, the observability linter, the action scope validator, the alert-to-record gate, the deletion evidence validator, the segment render-consistency gate, the ingress hardening conformance validator, the citizen spec-rails conformance linter, the component package conformance validator, the render-matrix consistency gate, the policy-component validation gate, the compliance controls-as-data gate, the supply-chain IAM-broker scope gate, the component lifecycle evidence gate, and the data contract conformance validator work; thresholds and rule names may still sharpen as the book’s companion tools grow (see the book’s issue #53 roadmap).
 
 ## The contracts
 
@@ -1101,6 +1105,88 @@ make lifecycle-demo
 #   9. a record for a component the manifest never packaged is caught at the join:
 #      caught as expected: gate/component-mismatch — a paper trail answering for somebody else's component
 ```
+## The data contract conformance validator
+
+The enforceable-data-contracts chapter's YAML makes the dataset's promises data. The **data contract** lives in the producer's repo and answers the chapter's questions as fields: which machine-checkable schema binds the dataset, how fresh it stays (`freshness.slaHours`), the quality thresholds it must not fall below, the owner who answers for it, the consumers who rely on it, the named checks that enforce it in CI — the contract's own enforcement evidence clause — and the change methodology that governs its evolution, modeled on the evolving-data-schemas sibling chapter's expand-migrate-contract discipline. The **enforcement record** is the CI's word for the same dataset: the checks that actually ran, one row per check, with the day each ran. The gate joins the two by dataset and by check name and is honest about the role: a conformance gate, not an advisor — every drift it finds is an error, the gate refuses, and the contract is not believed until the enforcement record backs it. The verdict ladder separates the failures honestly: `unreadable` (a document the gate cannot read), `drifts` (the join found drift), `consistent`.
+
+```yaml
+# datacontract.yaml — the dataset's promises as data
+dataset: payments.settlements    # the join runs on this name
+version: 2
+reviewedOn: 2026-10-18
+owner: Payments team
+
+schema:                          # the machine-checkable binding
+  ref: schemas/settlement-record.schema.json
+  subject: one settlement record as captured by the provider webhook
+
+freshness:
+  slaHours: 24                   # the one number the clause exists to carry
+
+quality:                         # each threshold bounded exactly one way
+  - { metric: settlement.completeness, min: 0.995 }
+  - { metric: settlement.schema-mismatch-rate, max: 0.001 }
+
+consumers:                       # the people a deprecation window is for
+  - { name: Billing team, use: settlement reconciliation }
+  - { name: Finance reporting, use: the nightly revenue roll-up }
+
+enforcement:                     # the named checks that run in CI
+  - { check: schema-conformance, pipeline: .github/workflows/data-contract-checks.yaml }
+  - { check: freshness-lag, pipeline: .github/workflows/data-contract-checks.yaml }
+  - { check: quality-thresholds, pipeline: .github/workflows/data-contract-checks.yaml }
+
+changes:                         # the discipline consumers negotiate against
+  methodology: expand-migrate-contract
+  deprecationWindowDays: 90
+```
+
+```yaml
+# enforcement.yaml — the CI's word: the checks that ran, and when
+dataset: payments.settlements     # must name the contract's dataset
+version: 1
+reviewedOn: 2026-10-19
+owner: Payments team
+
+runs:                            # one row per check, with the day it ran
+  - { check: schema-conformance, ranOn: 2026-10-20 }
+  - { check: freshness-lag, ranOn: 2026-10-20 }
+  - { check: quality-thresholds, ranOn: 2026-10-19 }
+```
+
+### What the validator enforces and proofs
+
+- **Loud validation of the contract** (`datacontract/validate`): the shapes — a version and a fresh review stamp (a contract nobody re-reads is a promise nobody can vouch for: `contract/version-required`, `contract/reviewed-stale`, `contract/reviewed-in-future`), the owner and dataset recorded (`contract/owner-required`, `dataset/required`), the schema clause with both its parts (`schema/required`, `schema/ref-required`, `schema/subject-required`), a freshness SLA that is a positive number (`freshness/required`, `freshness/sla-required`, `freshness/sla-invalid`), quality thresholds each named and bounded exactly one way (`quality/*`, `quality/bound-ambiguous` when both bounds land), consumers named with a use and unique (`consumers/*`, `consumer/*`), enforcement evidence as named checks in pipelines, with no duplicates (`enforcement/required`, `enforcement/check-required`, `enforcement/pipeline-required`, `check/duplicate`), and a change clause on a modeled methodology with a window (`changes/required`, `changes/methodology-required`, `changes/methodology-unknown`, `changes/deprecation-window-*`) — additive-first, breaking as a new version side by side, the drop its own late reviewed change, after a window measured in days.
+- **The evidence preconditions** (`datacontract/gate`): the record must be readable before the join is asked — present (`evidence/missing`), stamped and fresh (`evidence/*`), and its run rows well-formed and datable (`evidence/runs-must-be-array`, `evidence/row-must-be-object`, `run/check-required`, `run/ran-on-invalid`, `run/ran-in-future`, `run/duplicate`).
+- **The three drifts** (`datacontract/gate`, severity `error` — the gate refuses, `valid: false`, verdict `drifts`): evidence for a dataset the contract never names (`gate/dataset-mismatch`, citing both files), a declared check the record never shows running (`gate/check-never-run`, naming the check), and evidence for a check the contract never declared (`gate/check-undeclared`) — run rows the contract cannot vouch for are logs, not enforcement.
+- **The unreadable tier** (severity `error` — verdict `unreadable`): a document the gate cannot read. A contract without enforcement evidence, a freshness clause without an SLA, and an unversioned contract all stop the gate before the join is judged — a question the gate refuses to answer on inputs it cannot trust.
+- **One audit** (`datacontract/audit`): the composed entrypoint for CI and the playground — one verdict and the check cards alongside: one card per declared check, each `consistent` or `drifts`, with the run that resolved it.
+
+The done-when proof from book issue #106 runs as a single target:
+
+```sh
+make datacontract-demo
+# → 1. the data contract validates
+#   2. the control passes the gate and renders consistent
+#      control verdict: consistent — the whole board says so, one card per declared check
+#   3. a contract without enforcement evidence is caught at validation:
+#      caught as expected: enforcement/required — an unenforced contract is a promise nobody keeps
+#   4. a freshness clause without an SLA is caught at validation:
+#      caught as expected: freshness/sla-required — a promise of freshness with no number to breach
+#   5. an unversioned contract is caught, and the gate refuses to answer:
+#      caught as expected: contract/version-required, verdict unreadable — a question the gate refuses to answer on a contract it cannot read
+#   6. a check declared twice is caught at validation:
+#      caught as expected: check/duplicate — one check, one row
+#   7. a methodology the validator never modeled is caught at validation:
+#      caught as expected: changes/methodology-unknown — consumers negotiate against a discipline, not against hope
+#   8. a declared check the record never shows running is caught at the join:
+#      caught as expected: gate/check-never-run naming quality-thresholds — enforcement evidence that does not exist
+#   9. evidence for a dataset the contract never names is caught at the join:
+#      caught as expected: gate/dataset-mismatch — evidence for somebody else's promises is not evidence here
+#  10. evidence for a check the contract never declared is caught at the join:
+#      caught as expected: gate/check-undeclared — run rows the contract cannot vouch for are logs, not enforcement
+```
+
 
 ## Command line
 
@@ -1137,7 +1223,10 @@ make compliance-gate TODAY=2026-10-20         # the requirements catalog against
 make check-broker TODAY=2026-10-20            # the broker grant document alone
 make broker-gate  TODAY=2026-10-20            # the issued grants against the package manifest
 make check-lifecycle TODAY=2026-10-20        # the lifecycle record alone
-make lifecycle-gate TODAY=2026-10-20         # the lifecycle record against the package manifest```
+make lifecycle-gate TODAY=2026-10-20         # the lifecycle record against the package manifest
+make check-datacontract TODAY=2026-10-20      # the data contract alone
+make datacontract-gate TODAY=2026-10-20       # the enforcement record against the contract
+```
 
 `TODAY` defaults to the current date. `make examples` validates everything in [examples/](examples/) against the pinned anchor date `2026-10-20` so CI stays deterministic. Every `check-*` and `obs-*` target exits non-zero when the verdict is invalid — safe for CI and pre-commit hooks; the findings print above the failure line. To validate an estate split across directories, paste the JSON form directly:
 
@@ -1147,7 +1236,7 @@ opa eval -d policies -I 'data.estate.cross.validate' < bundle.json
 
 ## Playground
 
-The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed. The **Matrix gate** tab gates every fabric's rendered copy of the package against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the fabric cards: one per declared fabric, because the renders are not believed until every fabric agrees. The **Policy gate** tab gates the package manifest's policy bindings against the policy component catalog and renders the verdict — consistent, drifts, or unreadable — plus the policy cards: one per bound policy, because the same catalog backs many packages and no row is a drift by inventory. The **Compliance gate** tab gates the requirements catalog against the controls manifest — evidence sources, controls, and their review clocks — and renders the verdict — consistent, drifts, or unreadable — plus the requirement cards: one per declared requirement, because compliance is coverage and coverage is a join, not a claim. The **IAM Broker gate** tab gates the broker's issued grants against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the grant cards: one per issued grant, principal on component, because the grants are not believed until the manifest vouches for every one. The **Lifecycle gate** tab gates the component’s lifecycle record against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the transition cards: one per recorded transition, because a transition is not believed until its evidence vouches for it.
+The browser playground validates contracts and explains authorization decisions entirely client-side — the Rego is compiled to WebAssembly and evaluated in your browser; nothing is uploaded. The **Authz explainer** tab answers a request against a policy set and renders the decision trace: every rule considered, the criterion each non-firing rule failed on, and the rule that decided. The **Obs linter** tab runs the whole observability audit — contracts, scan, and metrics export — and renders the findings plus the per-metric cardinality arithmetic. The **Alert gate** tab runs the alerting contract and the incident register together and renders the findings plus the linkage map — one row per fired alert, each showing the record it landed in or NO RECORD. The **Action scope** tab gates an agent manifest against the action registry and renders the findings plus the per-agent scoping: what each agent may do, at which stage. The **Erasure gate** tab judges a right-to-be-forgotten case against the DEK registry and renders the verdict — forgotten, pending, honest, or incomplete — plus one row per inventory store: swept, expired, pending, or unswept. The **Segment gate** tab gates fabric renders, flow evidence, and a promotion PR against the segment contract and renders the verdict — consistent, review, or inconsistent — plus one card per contract rule: consistent, audit, mismatched, missing, or dead. The **Ingress gate** tab gates a drill record against the ingress posture case and renders the verdict — hardened, review, or exposed — plus the posture cards: one per judged item across the six areas, each with the record that resolved it. The **Citizen gate** tab gates the app's spec and the platform guardrail registry against the citizen app manifest and renders the verdict — aligned, advises changes, or unreadable — plus the advice cards: one per judged item across the four areas, aligned or advises, because the gate is an advisor, not a blocker. The **Component gate** tab gates a component package manifest against the component registry and renders the verdict — consistent, drifts, or unreadable — plus the conformance cards: one for the package registration, one per pinned dependency, because the package does not ship until every drift is fixed. The **Matrix gate** tab gates every fabric's rendered copy of the package against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the fabric cards: one per declared fabric, because the renders are not believed until every fabric agrees. The **Policy gate** tab gates the package manifest's policy bindings against the policy component catalog and renders the verdict — consistent, drifts, or unreadable — plus the policy cards: one per bound policy, because the same catalog backs many packages and no row is a drift by inventory. The **Compliance gate** tab gates the requirements catalog against the controls manifest — evidence sources, controls, and their review clocks — and renders the verdict — consistent, drifts, or unreadable — plus the requirement cards: one per declared requirement, because compliance is coverage and coverage is a join, not a claim. The **IAM Broker gate** tab gates the broker's issued grants against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the grant cards: one per issued grant, principal on component, because the grants are not believed until the manifest vouches for every one. The **Lifecycle gate** tab gates the component’s lifecycle record against the component package manifest and renders the verdict — consistent, drifts, or unreadable — plus the transition cards: one per recorded transition, because a transition is not believed until its evidence vouches for it. The **Data contract gate** tab gates the contract’s enforcement record against the data contract and renders the verdict — consistent, drifts, or unreadable — plus the check cards: one per declared check, because the contract is not believed until the enforcement record backs it.
 
 - **Deployed:** CI builds the playground and deploys it on every push to `main` through the official GitHub Pages actions. Make sure Settings → Pages → Build and deployment → Source is set to **GitHub Actions** (the repo started from the Jekyll scaffold; if Pages was set up that way, this already matches).
 - **Locally from a checkout:** run `make site`, then serve the `site-build/` folder over http (WebAssembly does not load over `file://`), e.g. `python3 -m http.server 8000 -d site-build`.
@@ -1172,7 +1261,8 @@ policies/policy/   lib, model, policy, gate, audit
 policies/compliance/ lib, model, policy, gate, audit
 policies/broker/    lib, model, policy, gate, audit
 policies/lifecycle/ lib, model, policy, gate, audit
-policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component + matrix + policy + compliance + broker + lifecycle)
+policies/datacontract/ lib, model, policy, gate, audit
+policies/tests/     Rego unit tests with embedded fixtures (estate + authz + obs + alerts + actions + erasure + segment + ingress + citizen + component + matrix + policy + compliance + broker + lifecycle + datacontract)
 schemas/            JSON Schema (draft-07) for every contract format + the policy set
 examples/           valid YAML contracts, a bundle, an authz policy set, the action
                     registry/manifest pair, the observability demo (contracts +
@@ -1189,12 +1279,13 @@ examples/           valid YAML contracts, a bundle, an authz policy set, the act
                     catalog, plus broken variants), and the IAM-broker demo
                     (grant document + package manifest, plus broken variants), and the lifecycle demo
                     (a component lifecycle record against the package manifest, plus
-                    broken variants)
+                    broken variants), and the data-contract demo
+                    (contract + enforcement record, plus broken variants)
 scan/               instrumentation scanner feeding the obs linter
 site/               single-page playground (plus vendored opa-wasm)
 test/e2e.mjs        node smoke test: wasm builds + vendored browser bundle
-Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-*/matrix-*/policy-*/compliance-*/broker-*/lifecycle-* targets
-.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, matrix demo, policy demo, compliance demo, broker demo, lifecycle demo, wasm build, e2e, Pages deploy
+Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts-*/actions-*/erasure-*/segment-*/ingress-*/citizen-*/component-*/matrix-*/policy-*/compliance-*/broker-*/lifecycle-*/datacontract-* targets
+.github/workflows/  CI: fmt, check, tests, examples, obs demo, alerts demo, actions demo, erasure demo, segment demo, ingress demo, citizen demo, component demo, matrix demo, policy demo, compliance demo, broker demo, lifecycle demo, datacontract demo, wasm build, e2e, Pages deploy
 ```
 
 ## Design notes
@@ -1204,7 +1295,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 - **The bundle policy judges relations, not fields.** `estate.cross` checks names, ownership, and coverage; per-contract field quality is the job of `estate.enclave` and `estate.seam`. Keeping them separate keeps each report focused.
 - **Authorization fails closed, loudly, and by name.** Every authz failure mode has its own rule (`policy/default-deny`, `policy/disabled-fail-closed`, …), a matching deny beats every allow, and among the rules that fire the alphabetically-first id is reported — so the same inputs always produce the same trace, which is what makes it usable as audit evidence.
 - **Versions are the audit substrate.** Rule ids carry across versions; `currentVersion` is explicit and never derived from the clock; windows may not overlap. Who-could-access questions are answered by replaying the history, not by remembering it.
-- **CI proves the browser path.** `make e2e` runs the seventeen `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
+- **CI proves the browser path.** `make e2e` runs the eighteen `policy.wasm` builds through the exact opa-wasm bundle the playground uses (in Node, which shares the browser’s WebAssembly stack), so “green in CI” means the playground actually works, not just the native policies.
 - **The allowlist is data, and it is judged against the vocabulary, not beside it.** An agent manifest may only grant actions the registry declares; argument scopes may only constrain parameters the action declares; a stage may not contradict the effects it grants. Keeping the registry and the manifest as two documents means the same registry can back many manifests, and the manifest can be re-judged every time the registry changes — default-deny is a judgment, not a hope.
 - **Cardinality is arithmetic, not vibes.** The gate multiplies the observed distinct values per label and compares the product to the budget total; it also checks each label against its own allocation and against the schema. A static product check on the budget itself (maxima vs. total) catches a budget that is born over-committed, before any export exists. Budget findings cite the budget file, because a breach without the document it breaches is a mystery, not a finding.
 - **Nothing pages without a record.** The alert gate is the loop-closer the other validators lack: the alerting contract declares where an alert must land, and the gate replays every fired alert against the register to prove it landed there. Severity rungs are dated because severity is a historical fact — a rung invented after the fire never fired — and postmortem actions carry verification evidence because "we fixed it" is a claim, not a closure.
@@ -1221,6 +1312,7 @@ Makefile            check/test/build/site/e2e/check-*/explain-authz/obs-*/alerts
 
 - **A grant is not believed until the manifest vouches for it.** The IAM-broker gate is minimality as a join, not a request: the broker's grants are data — one declared consumer principal, one component pinned by sha256 digest, an exact action set, an expiry — and the package manifest (#101) is the estate's word on what exists and at which digest. Wildcard and glob actions, undeclared principals, and expired grants are refused outright, and the join's two drifts — a component nobody packaged, a grant pinned at bytes the package never published — cite both files, because a mismatch without its documents is a mystery, not a finding. The join reads only the manifest's identity, digest, and pinned dependencies, so the same package backs many brokers and every grant set is re-judged when the package changes — the package's own conformance stays the component gate's word. And the gate says what it models: the action vocabulary is not judged (any exact, non-metacharacter name is allowed — the gate refuses broad scopes, not unfamiliar verbs), and the expiry has no maximum horizon, only not in the past.
 - **A transition is not believed until its evidence vouches for it.** The lifecycle gate is the same shape as the sibling gates pointed at the fourth dimension, time: every transition names its type and carries the evidence that type demands — a bake its sha256 image digest, a patch its provenance source and commit, an upgrade the date its rollback was rehearsed — and freshness is two clocks: the 365-day review clock, plus the review covering every transition, so a fact sneaked in after the review bites on a record that otherwise looks fresh. The gate is honest about what that evidence is: recorded and internally datable, not proven true — a rehearsed rollback is a fact about the calendar, not a fact about the rollback. The join is deliberately one rule: the record must answer for the manifest's component (`gate/component-mismatch`), and the package's own conformance stays the component gate's word — this gate reads only the manifest's component name, so the gates compose (#101 then #105) without either pretending to own the other's judgment.
+- **A promise without evidence is a wish.** The data contract validator closes the loop the earlier gates left open: the contract's enforcement evidence is a clause of the contract itself, so the checks that enforce it in CI are named where the promises are made, and the gate joins those names against the enforcement record's run rows — a declared check that never ran is enforcement evidence that does not exist, and a run row the contract cannot vouch for is a log, not enforcement. The join runs on dataset and check name, both ways, like the segment and render-matrix joins. The change clause is modeled on the evolving-data-schemas sibling chapter's expand-migrate-contract discipline — additive changes land on the same version, breaking changes ship as a new version side by side, the drop is its own late reviewed change — because consumers negotiate deprecation windows against a discipline, not against hope. And the gate says what it models: it checks the contract's own completeness — every clause present, internally consistent, and datable — not that enforcement actually ran while CI was trusted, and not that the schema matches the data; those answers live in the pipelines and the schema checks, not in policy.
 ## License
 
 [MIT](LICENSE) — same license as the book’s public tooling.
