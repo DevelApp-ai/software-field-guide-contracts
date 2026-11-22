@@ -85,6 +85,9 @@ jobs:
       - name: Compliance controls demo
         run: make compliance-demo
 
+      - name: IAM-broker scope demo
+        run: make broker-demo
+
       - name: Wasm build and browser-bundle smoke test
         run: make e2e
 

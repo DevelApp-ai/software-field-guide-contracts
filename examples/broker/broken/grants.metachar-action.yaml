@@ -1,0 +1,45 @@
+# Broken variant — grant/action-glob (book issue #104).
+#
+# The storefront build's pull grant allows the action "pull*",
+# which carries glob metacharacters the gate refuses to guess
+# against. The gate refuses it with grant/action-glob — the
+# allowed action set is exact names or it is not a set.
+#
+# The document is the control (examples/broker/grants.yaml) with
+# exactly one grant changed; every broken variant in this
+# directory bites with exactly one finding.
+
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The consumer identities the broker declares — the identities a
+# grant may name. A grant naming an undeclared principal is
+# refused: an identity the broker never declared is a principal
+# nobody granted.
+principals:
+  - storefront-build
+  - payments-build
+
+grants:
+  # The storefront build consumes the checkout package: pull only,
+  # pinned to the digest the package publishes, until the end of
+  # the quarter the review covers.
+  - principal: storefront-build
+    component: payments-checkout
+    digest: 5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c
+    actions:
+      - "pull*"
+    expires: 2026-12-31
+
+  # The payments build consumes the platform baseline the checkout
+  # package pins as its dependency: pull and attest, pinned to the
+  # digested dependency, until the platform team's next review.
+  - principal: payments-build
+    component: platform-baseline
+    digest: d6545bd91e241a29c789035968856b675b8987840191a5211d6f0fdfae60be44
+    actions:
+      - pull
+      - attest
+    expires: 2027-01-31
