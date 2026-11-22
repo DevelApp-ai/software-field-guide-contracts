@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the seventeen wasm bundles into build/wasm/
+#   make build         compile the eighteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -103,6 +103,16 @@
 #   make lifecycle-demo the done-when proof: a bake without its image
 #                      digest caught citing the record (runs the whole
 #                      demo)
+#   make check-datacontract validate the data contract (the schema, the
+#                      freshness SLA, the quality thresholds, the owner,
+#                      the consumers, the enforcement checks, the change
+#                      methodology) [DATACONTRACT=...] [TODAY=...]
+#   make datacontract-gate gate the contract against the enforcement
+#                      record — the CI's word [DATACONTRACT=...
+#                      DATACONTRACT_ENFORCEMENT=...] [TODAY=...]
+#   make datacontract-demo the done-when proof: a declared check the
+#                      record never shows running caught citing both
+#                      files (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -147,6 +157,8 @@ CONTROLS ?= examples/compliance/controls.yaml
 REQUIREMENTS ?= examples/compliance/requirements.yaml
 BROKER_GRANTS ?= examples/broker/grants.yaml
 LIFECYCLE_RECORD ?= examples/lifecycle/lifecycle.yaml
+DATACONTRACT ?= examples/datacontract/datacontract.yaml
+DATACONTRACT_ENFORCEMENT ?= examples/datacontract/enforcement.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -164,6 +176,7 @@ LIFECYCLE_RECORD ?= examples/lifecycle/lifecycle.yaml
 	check-compliance compliance-gate compliance-demo \
 	check-broker broker-gate broker-demo \
 	check-lifecycle lifecycle-gate lifecycle-demo \
+	check-datacontract datacontract-gate datacontract-demo \
 	examples ci
 
 fmt:
@@ -229,6 +242,9 @@ build:
 	$(OPA) build -t wasm -e lifecycle/audit -o build/lifecycle.tar.gz policies
 	tar -xzf build/lifecycle.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/lifecycle.wasm
+	$(OPA) build -t wasm -e datacontract/audit -o build/datacontract.tar.gz policies
+	tar -xzf build/datacontract.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/datacontract.wasm
 
 site: build
 	rm -rf site-build
@@ -1691,6 +1707,140 @@ lifecycle-demo:
 	@echo "caught as expected: gate/component-mismatch — a paper trail answering for somebody else's component"
 	@echo "--- lifecycle demo: all done-when proofs passed ---"
 
+# Validate the data contract alone: the enforceable-data-contracts
+# chapter's contract-as-data — the schema it is bound to, the
+# freshness SLA its consumers may rely on, the quality thresholds
+# it must not fall below, the owner who answers for it, the
+# consumers who rely on it, the named checks that enforce it in
+# CI, and the change methodology that governs its evolution.
+# Conformance gate, not advisor: any finding fails.
+check-datacontract:
+	@test -f "$(DATACONTRACT)" || { echo "usage: make check-datacontract [DATACONTRACT=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(DATACONTRACT)' \
+		| jq -cs --arg today "$(TODAY)" --arg contractFile "$(DATACONTRACT)" '{contract: .[0], today: $$today, contractFile: $$contractFile}' \
+		| $(OPA) eval -d policies -I 'data.datacontract.validate' --format=pretty | tee build/check-datacontract.json
+	@jq -e '.valid == true' build/check-datacontract.json > /dev/null \
+		|| { echo "check-datacontract: the data contract is not in conformance — findings above"; exit 1; }
+
+# Gate the data contract against the enforcement record — the CI's
+# word: the checks it actually ran, for one dataset, and the day
+# each ran. Conformance gate, not advisor: evidence for a dataset
+# the contract never names, a declared check the record never
+# shows running, and evidence for a check the contract never
+# declared are all refused, not advised.
+datacontract-gate:
+	@test -f "$(DATACONTRACT)" || { echo "usage: make datacontract-gate [DATACONTRACT=... DATACONTRACT_ENFORCEMENT=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(DATACONTRACT)' '$(DATACONTRACT_ENFORCEMENT)' \
+		| jq -cs --arg today "$(TODAY)" --arg contractFile "$(DATACONTRACT)" --arg enforcementFile "$(DATACONTRACT_ENFORCEMENT)" \
+			'{contract: .[0], enforcement: .[1], today: $$today, contractFile: $$contractFile, enforcementFile: $$enforcementFile}' \
+		| $(OPA) eval -d policies -I 'data.datacontract.gate' --format=pretty | tee build/datacontract-gate.json
+	@jq -e '.valid == true' build/datacontract-gate.json > /dev/null \
+		|| { echo "datacontract-gate: the data contract is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #106: the data contract
+# conformance gate refuses. Runs the control pair end to end, then
+# proves every broken variant bites exactly once with its named
+# rule — five at validation, three at the join — and that each
+# bite renders its verdict honestly.
+datacontract-demo:
+	@echo "--- 1. the data contract validates ---"
+	@$(MAKE) check-datacontract TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) datacontract-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/datacontract-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/datacontract-gate.json; exit 1; }
+	@jq -e '.cards | length == 3' build/datacontract-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared check"; cat build/datacontract-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per declared check"
+	@echo "--- 3. a contract without enforcement evidence is caught at validation ---"
+	@if $(MAKE) check-datacontract DATACONTRACT=examples/datacontract/broken/datacontract.no-enforcement.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-no-enforcement.txt 2>&1; \
+		then echo "FAIL: the unenforced contract passed validation"; cat build/datacontract-no-enforcement.txt; exit 1; \
+		else grep -q 'enforcement/required' build/datacontract-no-enforcement.txt \
+			|| { echo "FAIL: the validator failed without the enforcement rule"; cat build/datacontract-no-enforcement.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-datacontract.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-no-enforcement.txt; exit 1; }
+	@echo "caught as expected: enforcement/required — an unenforced contract is a promise nobody keeps"
+	@echo "--- 4. a freshness clause without an SLA is caught at validation ---"
+	@if $(MAKE) check-datacontract DATACONTRACT=examples/datacontract/broken/datacontract.freshness-no-sla.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-freshness.txt 2>&1; \
+		then echo "FAIL: the SLA-less freshness clause passed validation"; cat build/datacontract-freshness.txt; exit 1; \
+		else grep -q 'freshness/sla-required' build/datacontract-freshness.txt \
+			|| { echo "FAIL: the validator failed without the SLA rule"; cat build/datacontract-freshness.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-datacontract.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-freshness.txt; exit 1; }
+	@echo "caught as expected: freshness/sla-required — a promise of freshness with no number to breach"
+	@echo "--- 5. an unversioned contract is caught, and the gate refuses to answer ---"
+	@if $(MAKE) check-datacontract DATACONTRACT=examples/datacontract/broken/datacontract.unversioned.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-unversioned.txt 2>&1; \
+		then echo "FAIL: the unversioned contract passed validation"; cat build/datacontract-unversioned.txt; exit 1; \
+		else grep -q 'contract/version-required' build/datacontract-unversioned.txt \
+			|| { echo "FAIL: the validator failed without the version rule"; cat build/datacontract-unversioned.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-datacontract.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-unversioned.txt; exit 1; }
+	@if $(MAKE) datacontract-gate DATACONTRACT=examples/datacontract/broken/datacontract.unversioned.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-unversioned-gate.txt 2>&1; \
+		then echo "FAIL: the unversioned contract passed the gate"; cat build/datacontract-unversioned-gate.txt; exit 1; \
+		else grep -q '"verdict": "unreadable"' build/datacontract-unversioned-gate.txt \
+			|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/datacontract-unversioned-gate.txt; exit 1; }; \
+		fi
+	@echo "caught as expected: contract/version-required, verdict unreadable — a question the gate refuses to answer on a contract it cannot read"
+	@echo "--- 6. a check declared twice is caught at validation ---"
+	@if $(MAKE) check-datacontract DATACONTRACT=examples/datacontract/broken/datacontract.duplicate-check.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-duplicate.txt 2>&1; \
+		then echo "FAIL: the duplicate check passed validation"; cat build/datacontract-duplicate.txt; exit 1; \
+		else grep -q 'check/duplicate' build/datacontract-duplicate.txt \
+			|| { echo "FAIL: the validator failed without the duplicate rule"; cat build/datacontract-duplicate.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-datacontract.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-duplicate.txt; exit 1; }
+	@echo "caught as expected: check/duplicate — one check, one row"
+	@echo "--- 7. a methodology the validator never modeled is caught at validation ---"
+	@if $(MAKE) check-datacontract DATACONTRACT=examples/datacontract/broken/datacontract.methodology-unknown.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-methodology.txt 2>&1; \
+		then echo "FAIL: the unknown methodology passed validation"; cat build/datacontract-methodology.txt; exit 1; \
+		else grep -q 'changes/methodology-unknown' build/datacontract-methodology.txt \
+			|| { echo "FAIL: the validator failed without the methodology rule"; cat build/datacontract-methodology.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-datacontract.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-methodology.txt; exit 1; }
+	@echo "caught as expected: changes/methodology-unknown — consumers negotiate against a discipline, not against hope"
+	@echo "--- 8. a declared check the record never shows running is caught at the join ---"
+	@if $(MAKE) datacontract-gate DATACONTRACT_ENFORCEMENT=examples/datacontract/broken/enforcement.check-never-run.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-never-run.txt 2>&1; \
+		then echo "FAIL: the never-run check passed the gate"; cat build/datacontract-never-run.txt; exit 1; \
+		else grep -q 'gate/check-never-run' build/datacontract-never-run.txt \
+			|| { echo "FAIL: the gate failed without the never-run rule"; cat build/datacontract-never-run.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/datacontract-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/datacontract-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/datacontract-gate.json; exit 1; }
+	@grep -q 'quality-thresholds' build/datacontract-never-run.txt \
+		|| { echo "FAIL: the finding does not name the check that never ran"; cat build/datacontract-never-run.txt; exit 1; }
+	@echo "caught as expected: gate/check-never-run naming quality-thresholds — enforcement evidence that does not exist"
+	@echo "--- 9. evidence for a dataset the contract never names is caught at the join ---"
+	@if $(MAKE) datacontract-gate DATACONTRACT_ENFORCEMENT=examples/datacontract/broken/enforcement.wrong-dataset.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-wrong-dataset.txt 2>&1; \
+		then echo "FAIL: the other dataset's evidence passed the gate"; cat build/datacontract-wrong-dataset.txt; exit 1; \
+		else grep -q 'gate/dataset-mismatch' build/datacontract-wrong-dataset.txt \
+			|| { echo "FAIL: the gate failed without the dataset rule"; cat build/datacontract-wrong-dataset.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/datacontract-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/datacontract-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/datacontract-gate.json; exit 1; }
+	@echo "caught as expected: gate/dataset-mismatch — evidence for somebody else's promises is not evidence here"
+	@echo "--- 10. evidence for a check the contract never declared is caught at the join ---"
+	@if $(MAKE) datacontract-gate DATACONTRACT_ENFORCEMENT=examples/datacontract/broken/enforcement.extra-check.yaml TODAY=$(ANCHOR_TODAY) > build/datacontract-extra-check.txt 2>&1; \
+		then echo "FAIL: the undeclared check's run passed the gate"; cat build/datacontract-extra-check.txt; exit 1; \
+		else grep -q 'gate/check-undeclared' build/datacontract-extra-check.txt \
+			|| { echo "FAIL: the gate failed without the undeclared rule"; cat build/datacontract-extra-check.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/datacontract-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/datacontract-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/datacontract-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/datacontract-gate.json; exit 1; }
+	@echo "caught as expected: gate/check-undeclared — run rows the contract cannot vouch for are logs, not enforcement"
+	@echo "--- datacontract demo: all done-when proofs passed ---"
+
 
 # Validate every shipped example against the CI anchor date.
 examples:
@@ -1726,7 +1876,9 @@ examples:
 	$(MAKE) broker-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-lifecycle TODAY=$(ANCHOR_TODAY)
 	$(MAKE) lifecycle-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-datacontract TODAY=$(ANCHOR_TODAY)
+	$(MAKE) datacontract-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo broker-demo lifecycle-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo broker-demo lifecycle-demo datacontract-demo
 	$(OPA) fmt --fail -l policies

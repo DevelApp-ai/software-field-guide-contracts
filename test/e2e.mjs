@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the seventeen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the eighteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -228,6 +228,7 @@ const policyPolicy = await load('policy')
 const compliancePolicy = await load('compliance')
 const brokerPolicy = await load('broker')
 const lifecyclePolicy = await load('lifecycle')
+const datacontractPolicy = await load('datacontract')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1851,5 +1852,103 @@ assert(
 	hasFinding(r, 'gate/component-mismatch') && r.findings.length === 1 && r.verdict === 'drifts'
 		&& r.transitions.every((t) => t.verdict === 'drifts'),
 	'a record for a component the manifest never packaged drifts and every card says so',
+)
+// --- datacontract ----------------------------------------------------------
+//
+// Judged by the composed datacontract/audit entrypoint — the control
+// renders consistent with one card per declared check, and every
+// seeded drift is refused (a conformance gate, not an advisor: the
+// contract is not believed until the enforcement record backs it).
+
+const datacontract = {
+	dataset: 'payments.settlements',
+	version: 2,
+	reviewedOn: '2026-10-18',
+	owner: 'Payments team',
+	schema: {
+		ref: 'schemas/settlement-record.schema.json',
+		subject: 'one settlement record as captured by the provider webhook',
+	},
+	freshness: { slaHours: 24 },
+	quality: [
+		{ metric: 'settlement.completeness', min: 0.995 },
+		{ metric: 'settlement.schema-mismatch-rate', max: 0.001 },
+	],
+	consumers: [
+		{ name: 'Billing team', use: 'settlement reconciliation' },
+		{ name: 'Finance reporting', use: 'the nightly revenue roll-up' },
+	],
+	enforcement: [
+		{ check: 'schema-conformance', pipeline: '.github/workflows/data-contract-checks.yaml' },
+		{ check: 'freshness-lag', pipeline: '.github/workflows/data-contract-checks.yaml' },
+		{ check: 'quality-thresholds', pipeline: '.github/workflows/data-contract-checks.yaml' },
+	],
+	changes: {
+		methodology: 'expand-migrate-contract',
+		deprecationWindowDays: 90,
+	},
+}
+
+const enforcementRecord = {
+	dataset: 'payments.settlements',
+	version: 1,
+	reviewedOn: '2026-10-19',
+	owner: 'Payments team',
+	runs: [
+		{ check: 'schema-conformance', ranOn: '2026-10-20' },
+		{ check: 'freshness-lag', ranOn: '2026-10-20' },
+		{ check: 'quality-thresholds', ranOn: '2026-10-19' },
+	],
+}
+
+const datacontractAudit = (extra) => datacontractPolicy.evaluate({
+	contract: datacontract,
+	enforcement: enforcementRecord,
+	today,
+	contractFile: 'datacontract.yaml',
+	enforcementFile: 'enforcement.yaml',
+	...extra,
+})[0].result
+
+r = datacontractAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.cards.length === 3,
+	'the data contract control passes the audit in wasm and renders consistent',
+)
+
+r = datacontractAudit({ contract: { ...datacontract, enforcement: undefined } })
+assert(
+	hasFinding(r, 'enforcement/required') && r.valid === false && r.verdict === 'unreadable',
+	'a contract without enforcement evidence is refused in wasm',
+)
+
+r = datacontractAudit({ contract: { ...datacontract, freshness: {} } })
+assert(
+	hasFinding(r, 'freshness/sla-required') && r.valid === false && r.verdict === 'unreadable',
+	'a freshness clause without an SLA is refused in wasm',
+)
+
+r = datacontractAudit({ contract: { ...datacontract, version: null } })
+assert(
+	hasFinding(r, 'contract/version-required') && r.valid === false && r.verdict === 'unreadable',
+	'an unversioned contract is refused in wasm',
+)
+
+r = datacontractAudit({ enforcement: { ...enforcementRecord, runs: enforcementRecord.runs.filter((x) => x.check !== 'quality-thresholds') } })
+assert(
+	hasFinding(r, 'gate/check-never-run') && r.valid === false && r.verdict === 'drifts',
+	'a declared check the record never shows running is refused in wasm',
+)
+
+r = datacontractAudit({ enforcement: { ...enforcementRecord, dataset: 'risk.exposures' } })
+assert(
+	hasFinding(r, 'gate/dataset-mismatch') && r.valid === false && r.verdict === 'drifts',
+	'evidence for a dataset the contract never names is refused in wasm',
+)
+
+r = datacontractAudit({ enforcement: { ...enforcementRecord, runs: [...enforcementRecord.runs, { check: 'settlement-replay', ranOn: '2026-10-19' }] } })
+assert(
+	hasFinding(r, 'gate/check-undeclared') && r.valid === false && r.verdict === 'drifts',
+	'evidence for a check the contract never declared is refused in wasm',
 )
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

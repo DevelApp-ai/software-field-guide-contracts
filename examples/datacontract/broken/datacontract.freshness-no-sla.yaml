@@ -1,0 +1,86 @@
+# Data contract — The Software Field Guide, issue #106.
+#
+# The enforceable-data-contracts chapter's YAML: the dataset's
+# promises as data — the schema it is bound to, the freshness SLA
+# its consumers may rely on, the quality thresholds it must not
+# fall below, the owner who answers for it, the consumers who rely
+# on it, the named checks that enforce it in CI, and the change
+# methodology that governs its evolution. The enforcement record
+# (enforcement.yaml) is the CI's word for the same dataset; the
+# conformance gate joins the two documents by dataset and by check
+# name — a conformance gate, not an advisor: evidence for a
+# dataset the contract never names, a declared check the record
+# never shows running, and evidence for a check the contract never
+# declared are all refused. The validator is honest about what it
+# models: it checks the contract's own completeness — every clause
+# present, internally consistent, and datable — not that
+# enforcement actually ran while CI was trusted, and not that the
+# schema matches the data; those answers live in the pipelines and
+# the schema checks, not in policy.
+#
+# BROKEN VARIANT — the freshness clause carries no SLA: a promise
+# of freshness with no number to breach. The validator refuses:
+# freshness/sla-required. Bites exactly once at validation.
+#
+# The estate is seeded, after the chapter's worked example: the
+# payments team's settlement dataset, bound to its record schema,
+# held to two quality thresholds, serving two named consumers,
+# enforced by three checks that run in the data contract CI, and
+# governed by the expand-migrate-contract discipline. Example
+# dates are chosen relative to the CI anchor date 2026-10-20.
+
+dataset: payments.settlements
+version: 2
+reviewedOn: 2026-10-18
+owner: Payments team
+
+# The machine-checkable schema the dataset is bound to: its
+# reference and what one record of the dataset is. A contract
+# without its schema is a promise about data nobody can check.
+schema:
+  ref: schemas/settlement-record.schema.json
+  subject: one settlement record as captured by the provider webhook
+
+# The freshness clause: how stale the dataset may be before the
+# contract is breached. The one number the clause exists to carry.
+# (slaHours deliberately omitted — the clause is present, the
+# promise is not)
+freshness: {}
+
+# The quality thresholds the dataset must not fall below, each
+# bounded exactly one way. Quality nobody promised is quality
+# nobody has to keep.
+quality:
+  - metric: settlement.completeness
+    min: 0.995
+  - metric: settlement.schema-mismatch-rate
+    max: 0.001
+
+# The consumers who rely on the dataset, each named with the use
+# they put it to — the people a deprecation window is negotiated
+# with, and nobody else.
+consumers:
+  - name: Billing team
+    use: settlement reconciliation
+  - name: Finance reporting
+    use: the nightly revenue roll-up
+
+# The named checks that enforce the contract in CI — evidence of
+# enforcement is the contract's own clause, and the gate joins
+# these names against the enforcement record's run rows.
+enforcement:
+  - check: schema-conformance
+    pipeline: .github/workflows/data-contract-checks.yaml
+  - check: freshness-lag
+    pipeline: .github/workflows/data-contract-checks.yaml
+  - check: quality-thresholds
+    pipeline: .github/workflows/data-contract-checks.yaml
+
+# The change methodology that governs the contract's evolution,
+# per the evolving-data-schemas sibling chapter: additive changes
+# land on the same version, breaking changes ship as a new version
+# side by side, and the old one is dropped in its own late,
+# reviewed change after a deprecation window measured in days.
+changes:
+  methodology: expand-migrate-contract
+  deprecationWindowDays: 90
