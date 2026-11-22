@@ -1,0 +1,96 @@
+# Controls manifest — The Software Field Guide, issue #107.
+#
+# Compliance controls as data: the manifest declares the estate's
+# named evidence sources (each live or retired) and every control —
+# its title, its owner, the requirement ids it maps onto, the
+# evidence source it cites, and its review clock (the day it was last
+# reviewed and the interval it promises). The gate joins the
+# manifest against the requirements catalog
+# (examples/compliance/requirements.yaml) and refuses: a requirement
+# no control maps to, a control citing a requirement the catalog never
+# declared, a control pointing at a source the manifest retired, and
+# a control whose review clock has lapsed. The manifest is honest
+# about what it models: it checks that citations resolve inside the
+# manifest and that clocks have not lapsed — that the evidence store
+# still holds its logs is outside what a policy can check.
+#
+# The estate is seeded, after the compliance-as-code chapter's worked
+# example: the storefront's PCI, SOC 2, and GDPR obligations, one
+# control per declaration, each citing a live, named evidence source
+# with a fresh clock. The rows are seeded controls, not captures of
+# a real estate's GRC tool. Example dates are chosen relative to the
+# CI anchor date 2026-10-20.
+
+version: 1
+reviewedOn: 2026-10-18
+owner: Platform team
+
+# The named evidence sources the estate collects. The controls cite
+# these by id; a source the manifest declares retired is a citation a
+# control must not still carry.
+evidenceSources:
+  # edge-firewall-review — the quarterly firewall rule review record.
+  - id: edge-firewall-review
+    kind: review record
+    status: live
+
+  # encryption-config-scan — the nightly encryption configuration
+  # scanner's output.
+  - id: encryption-config-scan
+    kind: scanner output
+    status: live
+
+  # edge-access-logs — the access logs the edge gateway retains.
+  - id: edge-access-logs
+    kind: log store
+    status: live
+
+  # erasure-case-registry — the erasure case registry the deletion
+  # evidence chapter introduced.
+  - id: erasure-case-registry
+    kind: case registry
+    status: live
+
+# The controls: the estate's compliance work, one row per control.
+# Every row maps onto requirement ids from the catalog, cites one
+# evidence source by id, and carries its own review clock.
+controls:
+  # CTRL-01 — the firewall rule set reviewed and re-approved on a
+  # 180-day clock, evidenced by the review record.
+  - id: CTRL-01
+    title: Edge firewall rule set reviewed and re-approved quarterly
+    owner: Platform team
+    requirements: [PCI-DSS-2.2.7]
+    evidenceSource: edge-firewall-review
+    reviewedOn: 2026-09-15
+    intervalDays: 180
+
+  # CTRL-02 — data-at-rest encryption verified by the nightly scan,
+  # evidenced by the scanner output.
+  - id: CTRL-02
+    title: Data-at-rest encryption verified by the nightly config scan
+    owner: Storefront team
+    requirements: [PCI-DSS-3.4.1]
+    evidenceSource: encryption-config-scan
+    reviewedOn: 2026-10-10
+    intervalDays: 90
+
+  # CTRL-03 — edge access restricted to authenticated identities,
+  # evidenced by the access logs.
+  - id: CTRL-03
+    title: Edge access restricted to authenticated identities
+    owner: Platform team
+    requirements: [SOC2-CC6.1]
+    evidenceSource: edge-access-logs
+    reviewedOn: 2026-10-05
+    intervalDays: 90
+
+  # CTRL-04 — erasure cases closed inside the thirty-day GDPR
+  # window, evidenced by the case registry.
+  - id: CTRL-04
+    title: Erasure cases closed inside the thirty-day window
+    owner: Platform team
+    requirements: [GDPR-ART-17]
+    evidenceSource: erasure-case-registry
+    reviewedOn: 2026-07-01
+    intervalDays: 180
