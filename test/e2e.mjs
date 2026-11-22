@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the sixteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the seventeen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -227,6 +227,7 @@ const matrixPolicy = await load('matrix')
 const policyPolicy = await load('policy')
 const compliancePolicy = await load('compliance')
 const brokerPolicy = await load('broker')
+const lifecyclePolicy = await load('lifecycle')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1780,5 +1781,75 @@ r = brokerAudit({ broker: { ...brokerGrants, grants: brokerGrants.grants.map((g)
 assert(
 	hasFinding(r, 'grant/principal-undeclared') && r.valid === false && r.verdict === 'unreadable',
 	'an identity the broker never declared is refused in wasm',
+)
+// Component lifecycle evidence (#105): the record's transitions judged
+// against the package manifest through the same wasm bundle the
+// playground loads.
+const lifecycleRecord = {
+	version: 1,
+	reviewedOn: '2026-10-18',
+	owner: 'Payments team',
+	component: 'payments-checkout',
+	transitions: [
+		{ type: 'bake', recordedOn: '2026-09-30', imageDigest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c' },
+		{ type: 'patch', recordedOn: '2026-10-08', provenance: { source: 'payments/checkout.git', commit: '9f31c0e' } },
+		{ type: 'upgrade', recordedOn: '2026-10-15', rollback: { rehearsedOn: '2026-10-14' } },
+	],
+}
+
+const lifecycleAudit = (extra) => lifecyclePolicy.evaluate({
+	lifecycle: lifecycleRecord,
+	package: componentPackage,
+	today,
+	lifecycleFile: 'lifecycle.yaml',
+	packageFile: 'package.yaml',
+	...extra,
+})[0].result
+
+r = lifecycleAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent'
+		&& r.transitions.length === 3 && r.transitions.every((t) => t.verdict === 'consistent'),
+	'the lifecycle control passes the audit in wasm and renders one consistent card per transition',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, transitions: lifecycleRecord.transitions.map((t) => t.type === 'bake' ? { ...t, imageDigest: undefined } : t) } })
+assert(
+	hasFinding(r, 'transition/bake-digest-required') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'a bake without its image digest fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, transitions: lifecycleRecord.transitions.map((t) => t.type === 'patch' ? { ...t, provenance: undefined } : t) } })
+assert(
+	hasFinding(r, 'transition/patch-provenance-required') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'a patch with no provenance fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, transitions: lifecycleRecord.transitions.map((t) => t.type === 'upgrade' ? { ...t, rollback: undefined } : t) } })
+assert(
+	hasFinding(r, 'transition/upgrade-rollback-required') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'an upgrade nobody rehearsed the rollback for fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, transitions: lifecycleRecord.transitions.map((t) => t.type === 'patch' ? { ...t, recordedOn: '2026-10-19' } : t) } })
+assert(
+	hasFinding(r, 'transition/recorded-after-review') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'a transition the review never saw fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, transitions: lifecycleRecord.transitions.map((t) => t.type === 'bake' ? { ...t, type: 'deploy' } : t) } })
+assert(
+	hasFinding(r, 'transition/type-unknown') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'a transition whose type the gate cannot vouch for fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, reviewedOn: '2024-10-01', transitions: [
+	{ type: 'bake', recordedOn: '2024-09-02', imageDigest: '5766fab530f684e9ba8da7695939a9d13b278ffda31a1ea05bd825fc549d300c' },
+	{ type: 'patch', recordedOn: '2024-09-10', provenance: { source: 'payments/checkout.git', commit: '9f31c0e' } },
+	{ type: 'upgrade', recordedOn: '2024-09-28', rollback: { rehearsedOn: '2024-09-27' } },
+] } })
+assert(
+	hasFinding(r, 'lifecycle/reviewed-stale') && r.findings.length === 1 && r.verdict === 'unreadable',
+	'a record nobody has re-read in two years fails honestly in wasm',
+)
+r = lifecycleAudit({ lifecycle: { ...lifecycleRecord, component: 'storefront-theme' } })
+assert(
+	hasFinding(r, 'gate/component-mismatch') && r.findings.length === 1 && r.verdict === 'drifts'
+		&& r.transitions.every((t) => t.verdict === 'drifts'),
+	'a record for a component the manifest never packaged drifts and every card says so',
 )
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')
