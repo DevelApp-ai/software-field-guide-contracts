@@ -1,0 +1,52 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/datacontract-enforcement.schema.json",
+	"title": "Data contract enforcement record",
+	"description": "The data contract enforcement record, as defined in The Software Field Guide, issue #106: the CI's word — the checks it actually ran for one dataset, and the day each ran. Judged at the conformance gate against the data contract, as a conformance gate — not an advisor: evidence for a dataset the contract never names, a declared check the record never shows running, and evidence for a check the contract never declared are all refused. This schema mirrors the shape rules of the Rego validator (policies/datacontract); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, run dates not in the future, one run row per check, and the three drifts judged at the join.",
+	"type": "object",
+	"required": ["dataset", "version", "reviewedOn", "owner", "runs"],
+	"additionalProperties": true,
+	"properties": {
+		"dataset": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The dataset the record answers for. It must equal the contract's dataset: evidence for somebody else's promises is not evidence here."
+		},
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the record. Run evidence is versioned like the contract it answers for."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the record was last reviewed, YYYY-MM-DD. A record nobody re-reads is evidence nobody would still vouch for: the validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that maintains the record. Run evidence without an owner is a record nobody maintains."
+		},
+		"runs": {
+			"type": "array",
+			"description": "The checks the CI ran, one row per check. The gate joins these rows against the contract's declared checks, both ways.",
+			"items": {
+				"type": "object",
+				"required": ["check", "ranOn"],
+				"additionalProperties": true,
+				"properties": {
+					"check": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The check that ran, by name. Evidence for an unnamed check is evidence of nothing."
+					},
+					"ranOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the check ran, YYYY-MM-DD. Evidence dated after today is evidence that has not happened."
+					}
+				}
+			}
+		}
+	}
+}
