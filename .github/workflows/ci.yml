@@ -94,6 +94,9 @@ jobs:
       - name: Data contract conformance demo
         run: make datacontract-demo
 
+      - name: Identity and secrets scope demo
+        run: make identity-demo
+
       - name: Wasm build and browser-bundle smoke test
         run: make e2e
 
