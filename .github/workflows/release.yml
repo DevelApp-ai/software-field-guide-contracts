@@ -1,0 +1,218 @@
+name: release
+
+# Release lane for the estate and seam contract validators - the
+# repository had no release pipeline at all (zero tags, zero releases,
+# only ci.yml). A release is cut by pushing a v* tag; workflow_dispatch
+# with a tag input does the same from the default branch head;
+# pull_request runs the full lane EXCEPT release creation. The tag must
+# match the VERSION file at the repo root (v0.1.0 for the current tree).
+#
+# Assets per release, all SHA-256-digested in
+# contracts-<version>-checksums.txt:
+#   contracts-<version>-opa-bundle.tar.gz     all policies as one OPA bundle
+#   contracts-<version>-wasm-bundles.tar.gz  the compiled wasm modules
+#   contracts-<version>-playground.zip       the deployable playground
+#
+# This is a Rego and wasm repository: there is no exe and no nupkg, so
+# certificate code signing has no artifact to attach to here. Release
+# integrity is carried by the SHA-256 digest of every asset plus the
+# version stamped into the OPA bundle manifest, which the lane verifies
+# before the release is created. The checksum file is written from the
+# exact files that ship, and nothing is attached until every gate and
+# every digest check has passed.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must be v<major>.<minor>.<patch>, e.g. v0.1.0)'
+        required: true
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: gate, check, test, demos, bundle, wasm, playground
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+    env:
+      OPA_VERSION: v1.21.3
+      YQ_VERSION: v4.44.3
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install OPA
+        run: |
+          curl -sSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          sudo install -m 755 opa /usr/local/bin/opa
+          opa version
+
+      - name: Install yq
+        run: |
+          curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo install -m 755 yq /usr/local/bin/yq
+          yq --version
+
+      - name: Read version
+        id: ver
+        run: |
+          V=$(tr -d ' \t\r\n' < VERSION)
+          if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION file must contain exactly <major>.<minor>.<patch>, found '$V'"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          TAG=""
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then TAG="$GITHUB_REF_NAME"; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then TAG="$DISPATCH_TAG"; fi
+          if [ -n "$TAG" ] && ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "refusing tag '$TAG': expected v<major>.<minor>.<patch>"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Version gate
+        env:
+          CONTRACTS_VERSION: ${{ steps.ver.outputs.version }}
+          CONTRACTS_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ -n "$CONTRACTS_TAG" ] && [ "v$CONTRACTS_VERSION" != "$CONTRACTS_TAG" ]; then
+            echo "tag $CONTRACTS_TAG does not match the VERSION file $CONTRACTS_VERSION - bump VERSION or fix the tag"
+            exit 1
+          fi
+
+      - name: Format gate
+        run: opa fmt --fail -l policies
+
+      - name: Compile check
+        run: opa check policies
+
+      - name: Unit tests
+        run: opa test policies -v
+
+      - name: Validate examples
+        run: make examples
+
+      - name: Demo sweep
+        run: make obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo broker-demo lifecycle-demo datacontract-demo
+
+      - name: Compile wasm bundles
+        run: make build
+
+      - name: Wasm browser-bundle smoke test
+        run: make e2e
+
+      - name: Build OPA bundle
+        env:
+          CONTRACTS_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir -p dist
+          opa build -b policies --revision "$CONTRACTS_VERSION" -o "dist/contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz"
+
+      - name: Verify OPA bundle
+        env:
+          CONTRACTS_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          opa inspect --format json "dist/contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz" > bundle-inspect.json
+          jq -e --arg v "$CONTRACTS_VERSION" '.manifest.revision == $v' bundle-inspect.json
+
+      - name: Archive wasm bundles
+        env:
+          CONTRACTS_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          WASM_COUNT=$(find build/wasm -name '*.wasm' | wc -l)
+          echo "wasm bundles: $WASM_COUNT"
+          test "$WASM_COUNT" -ge 18
+          tar -czf "dist/contracts-$CONTRACTS_VERSION-wasm-bundles.tar.gz" -C build/wasm .
+
+      - name: Assemble and archive playground
+        env:
+          CONTRACTS_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          make site
+          (cd site-build && zip -qr "../dist/contracts-$CONTRACTS_VERSION-playground.zip" .)
+          python3 -c "import zipfile; z=zipfile.ZipFile('dist/contracts-$CONTRACTS_VERSION-playground.zip'); raise SystemExit(0 if 'index.html' in z.namelist() else 1)"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: checksums and GitHub release
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CONTRACTS_VERSION: ${{ needs.build.outputs.version }}
+      CONTRACTS_TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v7
+        with:
+          name: release-assets
+          path: dist/
+
+      - name: Write checksums
+        run: |
+          cd dist
+          ls -1 contracts-*
+          test "$(ls -1 contracts-* | wc -l)" -ge 3
+          sha256sum contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz \
+                    contracts-$CONTRACTS_VERSION-wasm-bundles.tar.gz \
+                    contracts-$CONTRACTS_VERSION-playground.zip \
+                    > "contracts-$CONTRACTS_VERSION-checksums.txt"
+          ls -1 contracts-$CONTRACTS_VERSION-checksums.txt
+
+      - name: Upload checksummed assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-assets-checksummed
+          path: dist/
+          if-no-files-found: error
+
+      - name: Create the release
+        if: env.CONTRACTS_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          ls -1
+          # fail closed: the release must carry the full asset set
+          test -f "contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz"
+          test -f "contracts-$CONTRACTS_VERSION-wasm-bundles.tar.gz"
+          test -f "contracts-$CONTRACTS_VERSION-playground.zip"
+          test -f "contracts-$CONTRACTS_VERSION-checksums.txt"
+          gh release create "$CONTRACTS_TAG" \
+            contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz \
+            contracts-$CONTRACTS_VERSION-wasm-bundles.tar.gz \
+            contracts-$CONTRACTS_VERSION-playground.zip \
+            contracts-$CONTRACTS_VERSION-checksums.txt \
+            --title "contracts $CONTRACTS_TAG" \
+            --notes "Estate and seam contract validators, release $CONTRACTS_TAG. All policies ship as the loadable OPA bundle (version stamped in its manifest), plus the compiled wasm bundles and the deployable playground. contracts-$CONTRACTS_VERSION-checksums.txt carries the SHA-256 of every asset. Verify with sha256sum --check contracts-$CONTRACTS_VERSION-checksums.txt, and confirm the bundle with opa inspect --format json contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz" \
+            || gh release upload "$CONTRACTS_TAG" \
+               contracts-$CONTRACTS_VERSION-opa-bundle.tar.gz \
+               contracts-$CONTRACTS_VERSION-wasm-bundles.tar.gz \
+               contracts-$CONTRACTS_VERSION-playground.zip \
+               contracts-$CONTRACTS_VERSION-checksums.txt \
+               --clobber
