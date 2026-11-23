@@ -1,0 +1,74 @@
+# Secrets catalog — The Software Field Guide, issue #108.
+#
+# The platform's word for the secrets that exist: each cataloged
+# secret names its kind (which decides how a leak ages and how
+# rotation is done), the one scope it grants (never a wildcard —
+# the catalog exists to name grants, not to grant everything),
+# its rotation clock (the day it last rotated and the age that
+# clock must not reach), and the identities admitted as its
+# consumers — permission is granted here, never assumed by a
+# manifest. The identity manifest (manifest.yaml) declares what
+# identities reference; the scope gate joins the two documents
+# deny-by-default. The catalog is honest about what it models:
+# every secret declared with a kind, a scope, a live rotation
+# clock, and named consumers — not that rotation actually
+# happened; that answer lives in the platform's secret store
+# and its tooling, not in policy.
+#
+# The estate is seeded, after the chapter's worked example: four
+# cataloged secrets for the payments platform, each with its
+# clock running against the CI anchor date 2026-10-20 — the
+# payments key 70 days from its 90-day clock, the settlement
+# signing key 41 days from its 60-day clock, the billing token
+# 45 days from its 90-day clock, and one reserved read token for
+# the coming reporting store, consumed by nobody yet: a
+# deliberately declared future is availability, not a drift.
+
+version: 4
+reviewedOn: 2026-10-19
+owner: Platform security
+
+# The secrets the platform holds, one row per secret. One secret,
+# one row: a credential declared twice is a credential nobody can
+# vouch for once.
+secrets:
+  # The charges API key: one grant, narrow, rotated on a
+  # 90-day clock, admitted to two consumers.
+  - name: payments-api-key
+    kind: api-key
+    scope: payments:charges
+    rotatedOn: 2026-09-30
+    maxAgeDays: 90
+    consumers:
+      - checkout-web
+      - checkout-worker
+
+  # The settlement signing key: authority to sign, held by one
+  # worker, rotated on a stricter 60-day clock.
+  - name: settlement-signing-key
+    kind: signing-key
+    scope: settlements:sign
+    rotatedOn: 2026-10-01
+    maxAgeDays: 60
+    consumers:
+      - checkout-worker
+
+  # The billing read token: read-only, granted to the exporter
+  # alone.
+  - name: billing-read-token
+    kind: service-token
+    scope: billing:read
+    rotatedOn: 2026-09-05
+    maxAgeDays: 90
+    consumers:
+      - billing-exporter
+
+  # Reserved for the coming reporting store: declared, clocked,
+  # and deliberately unconsumed. An unused grant is not a drift —
+  # it is a future with a rotation clock already attached.
+  - name: reportstore-readonly
+    kind: service-token
+    scope: reportstore:read
+    rotatedOn: 2026-10-02
+    maxAgeDays: 180
+    consumers: []

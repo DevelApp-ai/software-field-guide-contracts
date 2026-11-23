@@ -1,0 +1,58 @@
+# Secrets catalog — The Software Field Guide, issue #108.
+#
+# The platform's word for the secrets that exist: each cataloged
+# secret names its kind, the one scope it grants (never a
+# wildcard), its rotation clock (the day it last rotated and the
+# age that clock must not reach), and the identities admitted as
+# its consumers — permission is granted here, never assumed by a
+# manifest.
+#
+# BROKEN VARIANT — the settlement signing key was last rotated on
+# 2026-07-01, and its 60-day clock ran out 51 days before the
+# anchor date: a credential the platform holds past its rotation
+# clock is a credential attackers get extra time with. The gate
+# refuses: gate/rotation-overdue. Bites exactly once at the join.
+#
+# The estate is seeded, after the chapter's worked example: four
+# cataloged secrets for the payments platform, one of them
+# slipping on its clock. Example dates are chosen relative to the
+# CI anchor date 2026-10-20.
+
+version: 4
+reviewedOn: 2026-10-19
+owner: Platform security
+
+secrets:
+  - name: payments-api-key
+    kind: api-key
+    scope: payments:charges
+    rotatedOn: 2026-09-30
+    maxAgeDays: 90
+    consumers:
+      - checkout-web
+      - checkout-worker
+
+  # The settlement signing key — authority to sign, slipped past
+  # its rotation window.
+  - name: settlement-signing-key
+    kind: signing-key
+    scope: settlements:sign
+    rotatedOn: 2026-07-01
+    maxAgeDays: 60
+    consumers:
+      - checkout-worker
+
+  - name: billing-read-token
+    kind: service-token
+    scope: billing:read
+    rotatedOn: 2026-09-05
+    maxAgeDays: 90
+    consumers:
+      - billing-exporter
+
+  - name: reportstore-readonly
+    kind: service-token
+    scope: reportstore:read
+    rotatedOn: 2026-10-02
+    maxAgeDays: 180
+    consumers: []

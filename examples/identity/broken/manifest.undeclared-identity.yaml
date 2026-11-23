@@ -1,0 +1,54 @@
+# Identity manifest — The Software Field Guide, issue #108.
+#
+# The identity-and-secrets-scope chapter's YAML: the platform's
+# identities as data — each app that runs with a credential in hand
+# declares its name and the secrets it references, each reference
+# narrowed to the scope it uses and stamped with the day the
+# reference was granted. The secrets catalog (catalog.yaml) is the
+# platform's word for the secrets that exist, the scope each
+# grants, and the rotation clock each must answer to; the scope
+# gate joins the two documents by secret name and by consumer — a
+# scope gate, not an advisor, deny-by-default.
+#
+# BROKEN VARIANT — the web checkout references the billing read
+# token: the secret exists, the scope is right, but the catalog
+# does not name checkout-web among that secret's consumers.
+# Permission is granted by the catalog, never assumed by the
+# manifest. The gate refuses: gate/identity-undeclared. Bites
+# exactly once at the join.
+#
+# The estate is seeded, after the chapter's worked example: three
+# declared identities on the payments platform, one of them
+# helping itself to a neighbor's token. Example dates are chosen
+# relative to the CI anchor date 2026-10-20.
+
+version: 3
+reviewedOn: 2026-10-18
+owner: Platform security
+
+identities:
+  # The checkout front end: charges cards, and reads billing
+  # too — a convenience nobody granted.
+  - name: checkout-web
+    references:
+      - secret: payments-api-key
+        scope: payments:charges
+        since: 2026-08-02
+      - secret: billing-read-token
+        scope: billing:read
+        since: 2026-10-05
+
+  - name: checkout-worker
+    references:
+      - secret: payments-api-key
+        scope: payments:charges
+        since: 2026-09-14
+      - secret: settlement-signing-key
+        scope: settlements:sign
+        since: 2026-08-20
+
+  - name: billing-exporter
+    references:
+      - secret: billing-read-token
+        scope: billing:read
+        since: 2026-09-01

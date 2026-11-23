@@ -1,0 +1,60 @@
+# Identity manifest — The Software Field Guide, issue #108.
+#
+# The identity-and-secrets-scope chapter's YAML: the platform's
+# identities as data — each app that runs with a credential in hand
+# declares its name and the secrets it references, each reference
+# narrowed to the scope it uses and stamped with the day the
+# reference was granted. The secrets catalog (catalog.yaml) is the
+# platform's word for the secrets that exist, the scope each
+# grants, and the rotation clock each must answer to; the scope
+# gate joins the two documents by secret name and by consumer — a
+# scope gate, not an advisor: a reference the catalog cannot vouch
+# for, an identity the catalog never admitted among a secret's
+# consumers, a scope the catalog never wrote, and a rotation clock
+# that ran out are all refused. The validator is honest about what
+# it models: it checks the manifest's own completeness — every
+# identity named, every reference narrowed to one scope, no
+# wildcards, no duplicate identities, every grant dated — not that
+# the app runs as declared; that answer lives in the platform's
+# runtime, not in policy.
+#
+# The estate is seeded, after the chapter's worked example: three
+# declared identities on the payments platform — a web checkout, a
+# settlement worker, and a billing exporter — referencing three
+# cataloged secrets between them. One catalog secret is declared
+# for the future and consumed by nobody yet: availability is not
+# a drift. Example dates are chosen relative to the CI anchor
+# date 2026-10-20.
+
+version: 3
+reviewedOn: 2026-10-18
+owner: Platform security
+
+# The identities the platform runs with credentials in hand, each
+# declaring the secrets it references — the scopes the catalog is
+# asked to vouch for, and nobody else's.
+identities:
+  # The checkout front end: charges cards, and signs nothing.
+  - name: checkout-web
+    references:
+      - secret: payments-api-key
+        scope: payments:charges
+        since: 2026-08-02
+
+  # The settlement worker: charges cards and signs settlements —
+  # one credential to call, one to sign.
+  - name: checkout-worker
+    references:
+      - secret: payments-api-key
+        scope: payments:charges
+        since: 2026-09-14
+      - secret: settlement-signing-key
+        scope: settlements:sign
+        since: 2026-08-20
+
+  # The billing exporter: reads billing, changes nothing.
+  - name: billing-exporter
+    references:
+      - secret: billing-read-token
+        scope: billing:read
+        since: 2026-09-01
