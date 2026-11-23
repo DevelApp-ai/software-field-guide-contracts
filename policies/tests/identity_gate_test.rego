@@ -32,15 +32,18 @@ test_control_gate_passes_and_renders_consistent if {
 	count(r.findings) == 0
 	r.verdict == "consistent"
 }
+
 test_control_renders_one_card_per_declared_reference if {
 	r := identity.gate with input as fixture.control_input
 	count(r.cards) == 4
 	r.cards[0].area == "references"
 }
+
 test_control_card_verdicts_are_all_consistent if {
 	r := identity.gate with input as fixture.control_input
 	count([c | some c in r.cards; c.verdict == "consistent"]) == 4
 }
+
 test_control_card_details_carry_the_clock if {
 	r := identity.gate with input as fixture.control_input
 	card(r, "checkout-web/payments-api-key").detail == "the catalog admits 'checkout-web' to 'payments-api-key' at scope 'payments:charges', rotated 2026-09-30 with 70 days left on the clock (manifest.yaml, catalog.yaml)"
@@ -56,11 +59,13 @@ test_phantom_reference_fails_the_gate if {
 	error_rules(r)["gate/reference-unresolved"]
 	r.verdict == "drifts"
 }
+
 test_phantom_reference_bites_exactly_once if {
 	m := with_extra_reference(fixture.manifest, "billing-exporter", {"secret": "integration-webhook-secret", "scope": "integrations:send", "since": "2026-10-01"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
 	count(r.findings) == 1
 }
+
 test_phantom_reference_cites_both_files if {
 	m := with_extra_reference(fixture.manifest, "billing-exporter", {"secret": "integration-webhook-secret", "scope": "integrations:send", "since": "2026-10-01"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
@@ -69,6 +74,7 @@ test_phantom_reference_cites_both_files if {
 	contains(f.message, "manifest.yaml")
 	contains(f.message, "catalog.yaml")
 }
+
 test_phantom_reference_card_renders_drifts if {
 	m := with_extra_reference(fixture.manifest, "billing-exporter", {"secret": "integration-webhook-secret", "scope": "integrations:send", "since": "2026-10-01"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
@@ -87,6 +93,7 @@ test_undeclared_identity_fails_the_gate if {
 	error_rules(r)["gate/identity-undeclared"]
 	r.verdict == "drifts"
 }
+
 test_undeclared_identity_bites_exactly_once_and_cites_both_files if {
 	c := fixture.with_secret_field(fixture.catalog, "billing-read-token", {"consumers": []})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
@@ -95,6 +102,7 @@ test_undeclared_identity_bites_exactly_once_and_cites_both_files if {
 	contains(f.message, "manifest.yaml")
 	contains(f.message, "catalog.yaml")
 }
+
 test_undeclared_identity_card_renders_drifts if {
 	c := fixture.with_secret_field(fixture.catalog, "billing-read-token", {"consumers": []})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
@@ -112,6 +120,7 @@ test_scope_mismatch_fails_the_gate if {
 	error_rules(r)["gate/scope-mismatch"]
 	r.verdict == "drifts"
 }
+
 test_scope_mismatch_bites_exactly_once_and_cites_both_files if {
 	m := fixture.with_reference_field(fixture.manifest, "checkout-web", "payments-api-key", {"scope": "payments:refunds"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
@@ -120,6 +129,7 @@ test_scope_mismatch_bites_exactly_once_and_cites_both_files if {
 	contains(f.message, "manifest.yaml")
 	contains(f.message, "catalog.yaml")
 }
+
 test_scope_mismatch_card_renders_drifts if {
 	m := fixture.with_reference_field(fixture.manifest, "checkout-web", "payments-api-key", {"scope": "payments:refunds"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
@@ -136,6 +146,7 @@ test_rotation_overdue_fails_the_gate if {
 	error_rules(r)["gate/rotation-overdue"]
 	r.verdict == "drifts"
 }
+
 test_rotation_overdue_bites_exactly_once_and_cites_the_clock if {
 	c := fixture.with_secret_field(fixture.catalog, "settlement-signing-key", {"rotatedOn": "2026-07-01"})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
@@ -146,6 +157,7 @@ test_rotation_overdue_bites_exactly_once_and_cites_the_clock if {
 	contains(f.message, "60-day clock")
 	contains(f.message, "catalog.yaml")
 }
+
 test_rotation_overdue_card_renders_drifts if {
 	c := fixture.with_secret_field(fixture.catalog, "settlement-signing-key", {"rotatedOn": "2026-07-01"})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
@@ -170,18 +182,21 @@ test_missing_catalog_is_unreadable_not_drifts if {
 	error_rules(r)["catalog/missing"]
 	r.verdict == "unreadable"
 }
+
 test_stale_catalog_is_unreadable if {
 	c := fixture.with_field(fixture.catalog, {"reviewedOn": "2024-10-01"})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	error_rules(r)["catalog/reviewed-stale"]
 	r.verdict == "unreadable"
 }
+
 test_unknown_kind_is_unreadable if {
 	c := fixture.with_secret_field(fixture.catalog, "billing-read-token", {"kind": "post-it-note"})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	error_rules(r)["secret/kind-unknown"]
 	r.verdict == "unreadable"
 }
+
 test_wildcard_scope_stays_a_validation_story if {
 	m := fixture.with_reference_field(fixture.manifest, "checkout-web", "payments-api-key", {"scope": "*"})
 	r := identity.gate with input as fixture.gate_input(m, fixture.catalog)
@@ -189,12 +204,14 @@ test_wildcard_scope_stays_a_validation_story if {
 	count([f | some f in r.findings; f.rule == "gate/scope-mismatch"]) == 0
 	r.verdict == "unreadable"
 }
+
 test_missing_rotation_clock_is_unreadable if {
 	c := fixture.with_secret_field(fixture.catalog, "reportstore-readonly", {"rotatedOn": null})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	count([f | some f in r.findings; f.rule == "secret/rotated-on-required"]) == 1
 	r.verdict == "unreadable"
 }
+
 test_unreadable_clock_keeps_the_card_on_the_board if {
 	c := fixture.with_secret_field(fixture.catalog, "billing-read-token", {"rotatedOn": null})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
@@ -204,24 +221,28 @@ test_unreadable_clock_keeps_the_card_on_the_board if {
 	card(r, "billing-exporter/billing-read-token").verdict == "drifts"
 	card(r, "billing-exporter/billing-read-token").detail == "the catalog admits 'billing-exporter' to 'billing-read-token', but its rotation clock is not readable — see the findings (manifest.yaml, catalog.yaml)"
 }
+
 test_invalid_max_age_is_unreadable if {
 	c := fixture.with_secret_field(fixture.catalog, "payments-api-key", {"maxAgeDays": 0})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	error_rules(r)["secret/max-age-invalid"]
 	r.verdict == "unreadable"
 }
+
 test_consumers_must_be_an_array_of_names if {
 	c := fixture.with_secret_field(fixture.catalog, "payments-api-key", {"consumers": "checkout-web"})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	count([f | some f in r.findings; f.rule == "secret/consumers-must-be-array"]) == 1
 	r.verdict == "unreadable"
 }
+
 test_duplicate_consumer_bites_exactly_once if {
 	c := fixture.with_secret_field(fixture.catalog, "settlement-signing-key", {"consumers": ["checkout-worker", "checkout-worker"]})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)
 	count([f | some f in r.findings; f.rule == "secret/consumer-duplicate"]) == 1
 	r.verdict == "unreadable"
 }
+
 test_zero_day_clock_is_never_overdue if {
 	c := fixture.with_secret_field(fixture.catalog, "reportstore-readonly", {"maxAgeDays": 0})
 	r := identity.gate with input as fixture.gate_input(fixture.manifest, c)

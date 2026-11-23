@@ -20,6 +20,7 @@ manifest_doc := v if {
 }
 
 manifest_doc := null if not is_object(input)
+
 catalog_doc := v if {
 	is_object(input)
 	v := object.get(input, "catalog", null)
@@ -47,6 +48,7 @@ manifest_file := v if {
 }
 
 manifest_file := "the identity manifest" if not is_object(input)
+
 catalog_file := v if {
 	is_object(input)
 	v := object.get(input, "catalogFile", "the secrets catalog")
@@ -63,10 +65,12 @@ as_array(doc, key) := arr if {
 	arr := object.get(doc, key, [])
 	is_array(arr)
 }
+
 as_array(doc, key) := [] if {
 	is_object(doc)
 	not is_array(object.get(doc, key, []))
 }
+
 as_array(doc, key) := [] if not is_object(doc)
 
 # A positive integer — the manifest's own version and the catalog's
@@ -128,7 +132,9 @@ reference_pairs := [pair |
 # --- the catalog: its house stamps ----------------------------------------------
 
 catalog_version := object.get(catalog_doc, "version", null)
+
 catalog_reviewed_on := object.get(catalog_doc, "reviewedOn", null)
+
 catalog_owner := object.get(catalog_doc, "owner", null)
 
 # --- the catalog: the secrets ------------------------------------------------------

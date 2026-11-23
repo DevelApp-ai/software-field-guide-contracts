@@ -42,6 +42,7 @@ gate := result if {
 gate_findings := (((((((((((validate_findings | g_catalog_missing) | g_catalog_stamps) | g_catalog_shape) | g_secret_content) | g_secret_scope) | g_rotation_clock) | g_max_age) | g_consumers) | g_reference_unresolved) | g_identity_undeclared) | g_scope_mismatch) | g_rotation_overdue
 
 # --- findings: the secrets catalog at the gate ---------------------------------
+
 g_catalog_missing contains finding if {
 	not is_object(catalog_doc)
 	finding := {
@@ -51,6 +52,7 @@ g_catalog_missing contains finding if {
 		"path": "$.catalog",
 	}
 }
+
 g_catalog_stamps contains finding if {
 	is_object(catalog_doc)
 	not is_positive_integer(catalog_version)
@@ -61,6 +63,7 @@ g_catalog_stamps contains finding if {
 		"path": "$.catalog.version",
 	}
 }
+
 g_catalog_stamps contains finding if {
 	is_object(catalog_doc)
 	not lib.is_valid_date(catalog_reviewed_on)
@@ -71,6 +74,7 @@ g_catalog_stamps contains finding if {
 		"path": "$.catalog.reviewedOn",
 	}
 }
+
 g_catalog_stamps contains finding if {
 	is_object(catalog_doc)
 	lib.is_valid_date(catalog_reviewed_on)
@@ -83,6 +87,7 @@ g_catalog_stamps contains finding if {
 		"path": "$.catalog.reviewedOn",
 	}
 }
+
 g_catalog_stamps contains finding if {
 	is_object(catalog_doc)
 	lib.is_valid_date(catalog_reviewed_on)
@@ -95,6 +100,7 @@ g_catalog_stamps contains finding if {
 		"path": "$.catalog.reviewedOn",
 	}
 }
+
 g_catalog_stamps contains finding if {
 	is_object(catalog_doc)
 	not lib.is_nonempty_string(catalog_owner)
@@ -105,6 +111,7 @@ g_catalog_stamps contains finding if {
 		"path": "$.catalog.owner",
 	}
 }
+
 g_catalog_shape contains finding if {
 	is_object(catalog_doc)
 	not is_array(object.get(catalog_doc, "secrets", null))
@@ -115,6 +122,7 @@ g_catalog_shape contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_catalog_shape contains finding if {
 	is_object(catalog_doc)
 	is_array(object.get(catalog_doc, "secrets", null))
@@ -129,6 +137,7 @@ g_catalog_shape contains finding if {
 }
 
 # --- findings: each cataloged secret's own words -------------------------------
+
 g_secret_content contains finding if {
 	some s in secret_rows
 	not lib.is_nonempty_string(secret_name(s))
@@ -139,6 +148,7 @@ g_secret_content contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_secret_content contains finding if {
 	some s in secret_rows
 	lib.is_nonempty_string(secret_name(s))
@@ -150,6 +160,7 @@ g_secret_content contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_secret_content contains finding if {
 	some s in secret_rows
 	not lib.is_nonempty_string(secret_kind(s))
@@ -160,6 +171,7 @@ g_secret_content contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_secret_content contains finding if {
 	some s in secret_rows
 	lib.is_nonempty_string(secret_kind(s))
@@ -171,6 +183,7 @@ g_secret_content contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_secret_scope contains finding if {
 	some s in secret_rows
 	not lib.is_nonempty_string(secret_scope(s))
@@ -181,6 +194,7 @@ g_secret_scope contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_secret_scope contains finding if {
 	some s in secret_rows
 	secret_scope(s) == "*"
@@ -193,6 +207,7 @@ g_secret_scope contains finding if {
 }
 
 # --- findings: the rotation clock each secret must answer to --------------------
+
 g_rotation_clock contains finding if {
 	some s in secret_rows
 	secret_rotated_on(s) == null
@@ -203,6 +218,7 @@ g_rotation_clock contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_rotation_clock contains finding if {
 	some s in secret_rows
 	secret_rotated_on(s) != null
@@ -214,6 +230,7 @@ g_rotation_clock contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_rotation_clock contains finding if {
 	some s in secret_rows
 	lib.is_valid_date(secret_rotated_on(s))
@@ -226,6 +243,7 @@ g_rotation_clock contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_max_age contains finding if {
 	some s in secret_rows
 	secret_max_age_days(s) == null
@@ -236,6 +254,7 @@ g_max_age contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_max_age contains finding if {
 	some s in secret_rows
 	secret_max_age_days(s) != null
@@ -249,6 +268,7 @@ g_max_age contains finding if {
 }
 
 # --- findings: the consumers the catalog admits ---------------------------------
+
 g_consumers contains finding if {
 	some s in secret_rows
 	not is_array(object.get(s, "consumers", null))
@@ -259,6 +279,7 @@ g_consumers contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_consumers contains finding if {
 	some s in secret_rows
 	is_array(object.get(s, "consumers", null))
@@ -271,6 +292,7 @@ g_consumers contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_consumers contains finding if {
 	some s in secret_rows
 	some c in consumer_rows(s)
@@ -282,6 +304,7 @@ g_consumers contains finding if {
 		"path": "$.catalog.secrets",
 	}
 }
+
 g_consumers contains finding if {
 	some s in secret_rows
 	some c in consumer_rows(s)

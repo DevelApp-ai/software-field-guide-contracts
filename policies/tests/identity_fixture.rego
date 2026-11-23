@@ -42,6 +42,7 @@ manifest := {
 		},
 	],
 }
+
 catalog := {
 	"version": 4,
 	"reviewedOn": "2026-10-19",
@@ -87,6 +88,7 @@ validate_input(manifest_doc) := {
 	"today": today,
 	"manifestFile": manifest_file,
 }
+
 gate_input(manifest_doc, catalog_doc) := {
 	"manifest": manifest_doc,
 	"catalog": catalog_doc,

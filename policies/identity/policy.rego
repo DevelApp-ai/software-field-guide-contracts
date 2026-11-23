@@ -28,6 +28,7 @@ validate := {
 validate_findings := (((((((((f_input_invalid | f_today_invalid) | f_manifest_missing) | f_manifest_stamps) | f_identities_shape) | f_identity_content) | f_identity_duplicate) | f_references_shape) | f_reference_content) | f_reference_scope) | f_reference_since
 
 # --- findings: the input and the clock -----------------------------------------
+
 f_input_invalid contains finding if {
 	not is_object(input)
 	finding := {
@@ -37,6 +38,7 @@ f_input_invalid contains finding if {
 		"path": "$",
 	}
 }
+
 f_today_invalid contains finding if {
 	is_object(input)
 	not lib.is_valid_date(object.get(input, "today", null))
@@ -49,6 +51,7 @@ f_today_invalid contains finding if {
 }
 
 # --- findings: the manifest document and its house stamps -------------------------
+
 f_manifest_missing contains finding if {
 	not is_object(manifest_doc)
 	finding := {
@@ -58,6 +61,7 @@ f_manifest_missing contains finding if {
 		"path": "$.manifest",
 	}
 }
+
 f_manifest_stamps contains finding if {
 	is_object(manifest_doc)
 	not is_positive_integer(manifest_version)
@@ -68,6 +72,7 @@ f_manifest_stamps contains finding if {
 		"path": "$.manifest.version",
 	}
 }
+
 f_manifest_stamps contains finding if {
 	is_object(manifest_doc)
 	not lib.is_valid_date(manifest_reviewed_on)
@@ -78,6 +83,7 @@ f_manifest_stamps contains finding if {
 		"path": "$.manifest.reviewedOn",
 	}
 }
+
 f_manifest_stamps contains finding if {
 	is_object(manifest_doc)
 	lib.is_valid_date(manifest_reviewed_on)
@@ -90,6 +96,7 @@ f_manifest_stamps contains finding if {
 		"path": "$.manifest.reviewedOn",
 	}
 }
+
 f_manifest_stamps contains finding if {
 	is_object(manifest_doc)
 	lib.is_valid_date(manifest_reviewed_on)
@@ -102,6 +109,7 @@ f_manifest_stamps contains finding if {
 		"path": "$.manifest.reviewedOn",
 	}
 }
+
 f_manifest_stamps contains finding if {
 	is_object(manifest_doc)
 	not lib.is_nonempty_string(manifest_owner)
@@ -114,6 +122,7 @@ f_manifest_stamps contains finding if {
 }
 
 # --- findings: the identities the manifest declares -------------------------------
+
 f_identities_shape contains finding if {
 	is_object(manifest_doc)
 	not is_array(object.get(manifest_doc, "identities", null))
@@ -124,6 +133,7 @@ f_identities_shape contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_identities_shape contains finding if {
 	is_object(manifest_doc)
 	is_array(object.get(manifest_doc, "identities", null))
@@ -135,6 +145,7 @@ f_identities_shape contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_identities_shape contains finding if {
 	is_object(manifest_doc)
 	is_array(object.get(manifest_doc, "identities", null))
@@ -147,6 +158,7 @@ f_identities_shape contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_identity_content contains finding if {
 	some i in identity_rows
 	not lib.is_nonempty_string(identity_name(i))
@@ -157,6 +169,7 @@ f_identity_content contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_identity_duplicate contains finding if {
 	some i in identity_rows
 	lib.is_nonempty_string(identity_name(i))
@@ -170,6 +183,7 @@ f_identity_duplicate contains finding if {
 }
 
 # --- findings: the references each identity declares -------------------------------
+
 f_references_shape contains finding if {
 	some i in identity_rows
 	not is_array(object.get(i, "references", null))
@@ -180,6 +194,7 @@ f_references_shape contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_references_shape contains finding if {
 	some i in identity_rows
 	is_array(object.get(i, "references", null))
@@ -192,6 +207,7 @@ f_references_shape contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_reference_content contains finding if {
 	some p in reference_pairs
 	not lib.is_nonempty_string(reference_secret(p.row))
@@ -202,6 +218,7 @@ f_reference_content contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_reference_content contains finding if {
 	some p in reference_pairs
 	not lib.is_nonempty_string(reference_scope(p.row))
@@ -214,6 +231,7 @@ f_reference_content contains finding if {
 }
 
 # --- findings: scope minimality, judged on the manifest's own words ----------------
+
 f_reference_scope contains finding if {
 	some p in reference_pairs
 	reference_scope(p.row) == "*"
@@ -224,6 +242,7 @@ f_reference_scope contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_reference_scope contains finding if {
 	some p in reference_pairs
 	reference_scope(p.row) != "*"
@@ -237,6 +256,7 @@ f_reference_scope contains finding if {
 }
 
 # --- findings: since when the reference existed -----------------------------------
+
 f_reference_since contains finding if {
 	some p in reference_pairs
 	not lib.is_valid_date(reference_since(p.row))
@@ -247,6 +267,7 @@ f_reference_since contains finding if {
 		"path": "$.manifest.identities",
 	}
 }
+
 f_reference_since contains finding if {
 	some p in reference_pairs
 	lib.is_valid_date(reference_since(p.row))
