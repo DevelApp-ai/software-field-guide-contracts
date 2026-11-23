@@ -126,10 +126,9 @@ reference_pairs := [pair |
 ]
 
 # --- the catalog: its house stamps ----------------------------------------------
+
 catalog_version := object.get(catalog_doc, "version", null)
-
 catalog_reviewed_on := object.get(catalog_doc, "reviewedOn", null)
-
 catalog_owner := object.get(catalog_doc, "owner", null)
 
 # --- the catalog: the secrets ------------------------------------------------------

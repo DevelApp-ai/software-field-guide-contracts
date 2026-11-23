@@ -23,7 +23,6 @@ test_input_must_be_object if {
 	not r.valid
 	r.findings[0].rule == "input/invalid"
 }
-
 test_today_invalid if {
 	r := identity.validate with input as {"manifest": fixture.manifest, "today": "2026-13-01"}
 	not r.valid

@@ -79,7 +79,7 @@ g_catalog_stamps contains finding if {
 	finding := {
 		"severity": "error",
 		"rule": "catalog/reviewed-in-future",
-		"message": sprintf("the secrets catalog carries a reviewedOn date in the future (%s)", [catalog_file],
+		"message": sprintf("the secrets catalog carries a reviewedOn date in the future (%s)", [catalog_file]),
 		"path": "$.catalog.reviewedOn",
 	}
 }
@@ -91,7 +91,7 @@ g_catalog_stamps contains finding if {
 	finding := {
 		"severity": "error",
 		"rule": "catalog/reviewed-stale",
-		"message": sprintf("the secrets catalog was reviewed more than 365 days before today: the platform's secrets changed since, and this document says nothing about it (%s)", [catalog_file],
+		"message": sprintf("the secrets catalog was reviewed more than 365 days before today: the platform's secrets changed since, and this document says nothing about it (%s)", [catalog_file]),
 		"path": "$.catalog.reviewedOn",
 	}
 }
@@ -297,7 +297,7 @@ g_consumers contains finding if {
 # --- the four drifts, named ------------------------------------------------------
 
 # (1) The unresolved reference: the manifest names a secret the
-catalog never declared. A reference to a secret that does not
+# catalog never declared. A reference to a secret that does not
 # exist is either catalog drift or a secret that bypassed the
 # platform — both are refused.
 g_reference_unresolved contains finding if {
@@ -448,7 +448,7 @@ reference_card_detail(p) := detail if {
 
 reference_card_detail(p) := detail if {
 	secret_cataloged(reference_secret(p.row))
-	tcatalog_permits(p.identity, reference_secret(p.row))
+	catalog_permits(p.identity, reference_secret(p.row))
 	reference_scope(p.row) != secret_scope(cataloged_secret(reference_secret(p.row)))
 	detail := sprintf("the reference claims scope '%v', the catalog grants '%v' (%s, %s)", [
 		reference_scope(p.row),
