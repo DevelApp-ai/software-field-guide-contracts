@@ -9,3 +9,6 @@ yq
 # Package manager scratch
 node_modules/
 package-lock.json
+
+# Release working directory
+dist/
