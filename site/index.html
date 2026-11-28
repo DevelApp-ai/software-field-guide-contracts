@@ -174,6 +174,7 @@
 		<button role="tab" id="tab-broker" aria-selected="false">IAM Broker gate</button>
 		<button role="tab" id="tab-lifecycle" aria-selected="false">Lifecycle gate</button>
 		<button role="tab" id="tab-datacontract" aria-selected="false">Data contract gate</button>
+		<button role="tab" id="tab-identity" aria-selected="false">Identity gate</button>
 	</div>
 
 	<section class="panel active" id="panel-enclave">
@@ -313,6 +314,14 @@
 		<textarea id="editor-datacontract-enforcement" spellcheck="false"></textarea>
 	</section>
 
+	<section class="panel" id="panel-identity">
+		<p class="hint">Gate the estate's <strong>identity manifest</strong> against its <strong>secrets catalog</strong> — deny-by-default: each identity declares the secrets it references, narrowed to one scope and stamped with the day the reference was granted; the catalog is the platform's word for which secrets exist, the scope each grants, the rotation clock each must answer to, and the identities admitted as consumers. A wildcard scope, an identity declared twice, an unversioned manifest: refused before the catalog is even read. Then the manifest is held to the catalog: a reference the catalog cannot vouch for, an identity the catalog never admitted, a scope the catalog never wrote, a rotation clock that ran out: all refused — a scope gate, not an advisor, and the manifest is not believed until the catalog vouches for every reference. Try the loaded example, then empty the <code>consumers</code> list of a secret and watch the deny-by-default refusal land.</p>
+		<label for="editor-identity-manifest">Identity manifest (identities and the secrets they reference, each narrowed to one scope)</label>
+		<textarea id="editor-identity-manifest" spellcheck="false"></textarea>
+		<label for="editor-identity-catalog">Secrets catalog (kind, scope, rotation clock, and admitted consumers per secret)</label>
+		<textarea id="editor-identity-catalog" spellcheck="false"></textarea>
+	</section>
+
 	<div class="row">
 		<label for="today" id="today-label">Validate as of</label>
 		<input type="date" id="today">
@@ -328,7 +337,7 @@
 	</div>
 </main>
 <footer>
-	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough, <code>make policy-demo</code> for the policy-component conformance walkthrough, <code>make compliance-demo</code> for the compliance controls walkthrough, <code>make broker-demo</code> for the supply-chain IAM-broker scope walkthrough, <code>make lifecycle-demo</code> for the component lifecycle evidence walkthrough, <code>make datacontract-demo</code> for the data contract conformance walkthrough.</p>
+	<p>The playground loads the validator from <code>wasm/</code> next to this page. To run it locally from a checkout: <code>make site</code> and serve the <code>site-build/</code> folder (wasm needs http, not <code>file://</code>). CLI equivalents: <code>make check-enclave FILE=...</code> for contracts, <code>make explain-authz FILE=...</code> for authorization decisions, <code>make obs-demo</code> for the observability lint-and-gate walkthrough, <code>make alerts-demo</code> for the alert-to-record linkage walkthrough, <code>make actions-demo</code> for the action scope walkthrough, <code>make erasure-demo</code> for the deletion evidence walkthrough, <code>make segment-demo</code> for the segment render-consistency walkthrough, <code>make ingress-demo</code> for the ingress hardening walkthrough, <code>make citizen-demo</code> for the citizen spec-rails walkthrough, <code>make component-demo</code> for the component package conformance walkthrough, <code>make matrix-demo</code> for the render-matrix consistency walkthrough, <code>make policy-demo</code> for the policy-component conformance walkthrough, <code>make compliance-demo</code> for the compliance controls walkthrough, <code>make broker-demo</code> for the supply-chain IAM-broker scope walkthrough, <code>make lifecycle-demo</code> for the component lifecycle evidence walkthrough, <code>make datacontract-demo</code> for the data contract conformance walkthrough, <code>make identity-demo</code> for the identity and secrets scope walkthrough.</p>
 </footer>
 
 <script type="module">
@@ -351,6 +360,7 @@ const tabs = [
 	{ id: 'broker', pkg: 'broker' },
 	{ id: 'lifecycle', pkg: 'lifecycle' },
 	{ id: 'datacontract', pkg: 'datacontract' },
+	{ id: 'identity', pkg: 'identity' },
 ];
 let active = 'enclave';
 const policyCache = {};
@@ -1092,6 +1102,36 @@ examples.datacontractEnforcement = {
 	],
 };
 
+examples.identityManifest = {
+	version: 3,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform security',
+	identities: [
+		{ name: 'checkout-web', references: [
+			{ secret: 'payments-api-key', scope: 'payments:charges', since: '2026-08-02' },
+		] },
+		{ name: 'checkout-worker', references: [
+			{ secret: 'payments-api-key', scope: 'payments:charges', since: '2026-09-14' },
+			{ secret: 'settlement-signing-key', scope: 'settlements:sign', since: '2026-08-20' },
+		] },
+		{ name: 'billing-exporter', references: [
+			{ secret: 'billing-read-token', scope: 'billing:read', since: '2026-09-01' },
+		] },
+	],
+};
+
+examples.identityCatalog = {
+	version: 4,
+	reviewedOn: '2026-10-19',
+	owner: 'Platform security',
+	secrets: [
+		{ name: 'payments-api-key', kind: 'api-key', scope: 'payments:charges', rotatedOn: '2026-09-30', maxAgeDays: 90, consumers: ['checkout-web', 'checkout-worker'] },
+		{ name: 'settlement-signing-key', kind: 'signing-key', scope: 'settlements:sign', rotatedOn: '2026-10-01', maxAgeDays: 60, consumers: ['checkout-worker'] },
+		{ name: 'billing-read-token', kind: 'service-token', scope: 'billing:read', rotatedOn: '2026-09-05', maxAgeDays: 90, consumers: ['billing-exporter'] },
+		{ name: 'reportstore-readonly', kind: 'service-token', scope: 'reportstore:read', rotatedOn: '2026-10-02', maxAgeDays: 180, consumers: [] },
+	],
+};
+
 examples.bundle = {
 	enclaves: [examples.enclave, {
 		enclave: 'payments',
@@ -1137,7 +1177,7 @@ function selectTab(id) {
 		document.getElementById('tab-' + t.id).setAttribute('aria-selected', String(t.id === id));
 		document.getElementById('panel-' + t.id).classList.toggle('active', t.id === id);
 	}
-	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix' && id !== 'policy' && id !== 'compliance' && id !== 'broker' && id !== 'lifecycle' && id !== 'datacontract';
+	const needsToday = id !== 'bundle' && id !== 'authz' && id !== 'obs' && id !== 'alerts' && id !== 'actions' && id !== 'erasure' && id !== 'segment' && id !== 'ingress' && id !== 'citizen' && id !== 'component' && id !== 'matrix' && id !== 'policy' && id !== 'compliance' && id !== 'broker' && id !== 'lifecycle' && id !== 'datacontract' && id !== 'identity';
 	document.getElementById('today-label').style.display = needsToday ? 'block' : 'none';
 	todayInput.style.display = needsToday ? 'inline-block' : 'none';
 	if (id === 'authz') {
@@ -1243,6 +1283,13 @@ function selectTab(id) {
 		for (const [el, value] of [
 			[editor('datacontract-contract'), examples.datacontractContract],
 			[editor('datacontract-enforcement'), examples.datacontractEnforcement],
+		]) {
+			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
+		}
+	} else if (id === 'identity') {
+		for (const [el, value] of [
+			[editor('identity-manifest'), examples.identityManifest],
+			[editor('identity-catalog'), examples.identityCatalog],
 		]) {
 			if (!el.value.trim()) el.value = JSON.stringify(value, null, 2);
 		}
@@ -1630,6 +1677,30 @@ function renderDatacontract(result) {
 	findingsBox.append(card);
 }
 
+function renderIdentity(result) {
+	render(result);
+	const card = document.createElement('div');
+	card.className = 'finding';
+	const chip = document.createElement('span');
+	chip.className = 'sev neutral';
+	chip.textContent = 'verdict';
+	const title = document.createElement('span');
+	title.className = 'rule';
+	title.textContent = ' ' + result.verdict;
+	card.append(chip, title);
+	const head = document.createElement('p');
+	head.className = 'summary';
+	head.textContent = 'scope gate, not advisor, deny-by-default: one card per declared reference — the manifest is not believed until the catalog vouches for it';
+	card.append(head);
+	for (const item of result.cards) {
+		const row = document.createElement('p');
+		row.className = item.verdict === 'consistent' ? 'summary' : 'msg';
+		row.textContent = item.area + ' — ' + item.item + '  →  ' + item.verdict + '  (' + item.detail + ')';
+		card.append(row);
+	}
+	findingsBox.append(card);
+}
+
 function traceChip(step) {
 	if (step.outcome === 'matched') return { cls: 'matched', text: 'matched' };
 	if (step.outcome) return { cls: 'neutral', text: step.outcome };
@@ -1920,6 +1991,24 @@ validateBtn.addEventListener('click', async () => {
 			contractFile: 'datacontract.yaml',
 			enforcementFile: 'enforcement.yaml',
 		};
+	} else if (active === 'identity') {
+		const manifest = parseEditor('identity-manifest');
+		const catalog = parseEditor('identity-catalog');
+		if (manifest.error) {
+			setStatus('Identity manifest: ' + manifest.error, true);
+			return;
+		}
+		if (catalog.error) {
+			setStatus('Secrets catalog: ' + catalog.error, true);
+			return;
+		}
+		input = {
+			manifest: manifest.value,
+			catalog: catalog.value,
+			today: '2026-10-20',
+			manifestFile: 'manifest.yaml',
+			catalogFile: 'catalog.yaml',
+		};
 	} else {
 		const parsed = parseEditor(active);
 		if (parsed.error) {
@@ -2033,6 +2122,12 @@ validateBtn.addEventListener('click', async () => {
 			} else {
 				renderDatacontract(result);
 			}
+		} else if (active === 'identity') {
+			if (!result || typeof result.valid !== 'boolean' || !Array.isArray(result.findings) || !Array.isArray(result.cards) || typeof result.verdict !== 'string') {
+				setStatus('The gate returned an unexpected result: ' + JSON.stringify(outcome), true);
+			} else {
+				renderIdentity(result);
+			}
 		} else if (!result || typeof result.valid !== 'boolean') {
 			setStatus('The validator returned an unexpected result: ' + JSON.stringify(outcome), true);
 		} else {
@@ -2094,6 +2189,9 @@ exampleBtn.addEventListener('click', () => {
 	} else if (active === 'datacontract') {
 		editor('datacontract-contract').value = JSON.stringify(examples.datacontractContract, null, 2);
 		editor('datacontract-enforcement').value = JSON.stringify(examples.datacontractEnforcement, null, 2);
+	} else if (active === 'identity') {
+		editor('identity-manifest').value = JSON.stringify(examples.identityManifest, null, 2);
+		editor('identity-catalog').value = JSON.stringify(examples.identityCatalog, null, 2);
 	} else {
 		editor(active).value = JSON.stringify(examples[active], null, 2);
 	}

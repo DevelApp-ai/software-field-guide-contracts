@@ -1,0 +1,72 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/identity-catalog.schema.json",
+	"title": "Secrets catalog",
+	"description": "The secrets catalog, as defined in The Software Field Guide, issue #108: the platform's word for the secrets that exist. Each cataloged secret names its kind (which decides how a leak ages and how rotation is done), the one scope it grants (never a wildcard), its rotation clock (the day it last rotated and the age that clock must not reach), and the identities admitted as its consumers — permission is granted here, never assumed by a manifest. The catalog is honest about what it models: every secret declared with a kind, a scope, a live rotation clock, and named consumers — not that rotation actually happened; that answer lives in the platform's secret store and its tooling, not in policy. This schema mirrors the shape rules of the Rego validator (policies/identity); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn and rotatedOn real calendar dates not in the future, no reviewed catalog older than 365 days, the modeled kinds only, no glob-shaped or wildcard scopes, no duplicate secrets or consumers, maxAgeDays a positive number, and the joins judged at the gate against the identity manifest.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "secrets"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the catalog. An unversioned catalog is a catalog nobody can pin a rotation against."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the catalog was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the catalog and answers for the secrets it declares. A catalog with an owner and a review cadence is the discipline."
+		},
+		"secrets": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The secrets the platform holds, one row per secret. One secret, one row: a credential declared twice is a credential nobody can vouch for once.",
+			"items": {
+				"type": "object",
+				"required": ["name", "kind", "scope", "rotatedOn", "maxAgeDays", "consumers"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The secret's name. The manifest references secrets by this name, and the gate joins on it — an unnamed secret is a grant nobody can scope."
+					},
+					"kind": {
+						"type": "string",
+						"enum": ["api-key", "service-token", "signing-key", "certificate"],
+						"description": "The secret's kind. How a credential authenticates decides how it must be rotated. The validator models api-key, service-token, signing-key, and certificate, and refuses a kind it never agreed to."
+					},
+					"scope": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The one scope the secret grants. The catalog exists to name grants, not to grant everything — a scope that means everything is a breach nobody can bound, and the validator refuses wildcards and glob shapes."
+					},
+					"rotatedOn": {
+						"type": "string",
+						"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+						"description": "The day the secret last rotated, YYYY-MM-DD. A secret with no rotation clock is a credential the platform holds forever; the validator flags dates that are not real or in the future, and the gate refuses a clock that ran out."
+					},
+					"maxAgeDays": {
+						"type": "number",
+						"exclusiveMinimum": 0,
+						"description": "The age the secret's rotation may reach, in days. A clock with nothing to measure against never rings — a zero-day clock is a rotation schedule nobody can keep."
+					},
+					"consumers": {
+						"type": "array",
+						"description": "The identities admitted to consume the secret, by name. Permission is granted by the catalog, never assumed by the manifest — a consumer nobody can name is permission nobody can revoke. The list may be empty: a deliberately reserved secret is availability, not a drift.",
+						"items": {
+							"type": "string",
+							"minLength": 1,
+							"description": "An admitted consumer's identity name, exactly as the manifest declares it. One identity, one entry."
+						}
+					}
+				}
+			}
+		}
+	}
+}

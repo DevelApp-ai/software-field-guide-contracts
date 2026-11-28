@@ -1,4 +1,4 @@
-// End-to-end smoke test: loads the eighteen policy.wasm builds and evaluates
+// End-to-end smoke test: loads the nineteen policy.wasm builds and evaluates
 // them through the vendored @open-policy-agent/opa-wasm browser bundle
 // (the exact module the Pages playground imports). CI runs this after
 // `make build`; it fails loudly if the wasm build, the vendored bundle,
@@ -229,6 +229,7 @@ const compliancePolicy = await load('compliance')
 const brokerPolicy = await load('broker')
 const lifecyclePolicy = await load('lifecycle')
 const datacontractPolicy = await load('datacontract')
+const identityPolicy = await load('identity')
 
 const enclavePolicy = await load('enclave')
 const seamPolicy = await load('seam')
@@ -1951,4 +1952,113 @@ assert(
 	hasFinding(r, 'gate/check-undeclared') && r.valid === false && r.verdict === 'drifts',
 	'evidence for a check the contract never declared is refused in wasm',
 )
+
+// --- identity ---------------------------------------------------------------
+//
+// Judged by the composed identity/audit entrypoint — the control
+// renders consistent with one card per declared reference, and
+// every seeded drift is refused (a scope gate, not an advisor,
+// deny-by-default: the manifest is not believed until the
+// catalog vouches for every reference).
+
+const identityManifest = {
+	version: 3,
+	reviewedOn: '2026-10-18',
+	owner: 'Platform security',
+	identities: [
+		{ name: 'checkout-web', references: [
+			{ secret: 'payments-api-key', scope: 'payments:charges', since: '2026-08-02' },
+		] },
+		{ name: 'checkout-worker', references: [
+			{ secret: 'payments-api-key', scope: 'payments:charges', since: '2026-09-14' },
+			{ secret: 'settlement-signing-key', scope: 'settlements:sign', since: '2026-08-20' },
+		] },
+		{ name: 'billing-exporter', references: [
+			{ secret: 'billing-read-token', scope: 'billing:read', since: '2026-09-01' },
+		] },
+	],
+}
+
+const secretsCatalog = {
+	version: 4,
+	reviewedOn: '2026-10-19',
+	owner: 'Platform security',
+	secrets: [
+		{ name: 'payments-api-key', kind: 'api-key', scope: 'payments:charges', rotatedOn: '2026-09-30', maxAgeDays: 90, consumers: ['checkout-web', 'checkout-worker'] },
+		{ name: 'settlement-signing-key', kind: 'signing-key', scope: 'settlements:sign', rotatedOn: '2026-10-01', maxAgeDays: 60, consumers: ['checkout-worker'] },
+		{ name: 'billing-read-token', kind: 'service-token', scope: 'billing:read', rotatedOn: '2026-09-05', maxAgeDays: 90, consumers: ['billing-exporter'] },
+	],
+}
+
+const identityAudit = (extra) => identityPolicy.evaluate({
+	manifest: identityManifest,
+	catalog: secretsCatalog,
+	today,
+	manifestFile: 'manifest.yaml',
+	catalogFile: 'catalog.yaml',
+	...extra,
+})[0].result
+
+r = identityAudit({})
+assert(
+	r.valid === true && r.findings.length === 0 && r.verdict === 'consistent' && r.cards.length === 4
+		&& r.cards.every((c) => c.verdict === 'consistent'),
+	'the identity control passes the audit in wasm and renders the whole board consistent',
+)
+
+r = identityAudit({ manifest: { ...identityManifest, identities: identityManifest.identities.map((i) =>
+	i.name === 'checkout-web'
+		? { ...i, references: [{ secret: 'payments-api-key', scope: '*', since: '2026-08-02' }] }
+		: i) } })
+assert(
+	hasFinding(r, 'reference/scope-wildcard') && r.findings.length === 1 && r.valid === false && r.verdict === 'unreadable',
+	'a wildcard scope is refused in wasm',
+)
+
+r = identityAudit({ manifest: { ...identityManifest, identities: [...identityManifest.identities,
+	{ name: 'checkout-web', references: [] }] } })
+assert(
+	hasFinding(r, 'identity/name-duplicate') && r.findings.length === 1 && r.valid === false && r.verdict === 'unreadable',
+	'an identity declared twice is refused in wasm',
+)
+
+r = identityAudit({ catalog: { ...secretsCatalog, secrets: secretsCatalog.secrets.map((s) =>
+	s.name === 'billing-read-token' ? { ...s, rotatedOn: undefined } : s) } })
+assert(
+	hasFinding(r, 'secret/rotated-on-required') && r.findings.length === 1 && r.valid === false && r.verdict === 'unreadable',
+	'a secret with no rotation clock is refused in wasm',
+)
+
+r = identityAudit({ manifest: { ...identityManifest, identities: identityManifest.identities.map((i) =>
+	i.name === 'billing-exporter'
+		? { ...i, references: [...i.references, { secret: 'integration-webhook-secret', scope: 'integrations:send', since: '2026-10-01' }] }
+		: i) } })
+assert(
+	hasFinding(r, 'gate/reference-unresolved') && r.findings.length === 1 && r.valid === false && r.verdict === 'drifts',
+	'a reference the catalog cannot vouch for is refused in wasm',
+)
+
+r = identityAudit({ catalog: { ...secretsCatalog, secrets: secretsCatalog.secrets.map((s) =>
+	s.name === 'billing-read-token' ? { ...s, consumers: [] } : s) } })
+assert(
+	hasFinding(r, 'gate/identity-undeclared') && r.findings.length === 1 && r.valid === false && r.verdict === 'drifts',
+	'an identity the catalog never admitted is refused in wasm',
+)
+
+r = identityAudit({ manifest: { ...identityManifest, identities: identityManifest.identities.map((i) =>
+	i.name === 'checkout-web'
+		? { ...i, references: [{ secret: 'payments-api-key', scope: 'payments:refunds', since: '2026-08-02' }] }
+		: i) } })
+assert(
+	hasFinding(r, 'gate/scope-mismatch') && r.findings.length === 1 && r.valid === false && r.verdict === 'drifts',
+	'a scope the catalog never wrote is refused in wasm',
+)
+
+r = identityAudit({ catalog: { ...secretsCatalog, secrets: secretsCatalog.secrets.map((s) =>
+	s.name === 'settlement-signing-key' ? { ...s, rotatedOn: '2026-07-01' } : s) } })
+assert(
+	hasFinding(r, 'gate/rotation-overdue') && r.findings.length === 1 && r.valid === false && r.verdict === 'drifts',
+	'a rotation clock that ran out is refused in wasm',
+)
+
 console.log(process.exitCode ? 'e2e: FAILED' : 'e2e: all assertions passed')

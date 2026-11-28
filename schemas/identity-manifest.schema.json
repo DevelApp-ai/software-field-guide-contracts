@@ -1,0 +1,70 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/DevelApp-ai/software-field-guide-contracts/main/schemas/identity-manifest.schema.json",
+	"title": "Identity manifest",
+	"description": "The identity manifest, as defined in The Software Field Guide, issue #108: the identity-and-secrets-scope chapter's YAML — the platform's identities as data. Each identity declares its name and the secrets it references, each reference narrowed to the scope it uses and stamped with the day the reference was granted. The validator is honest about what it models: it checks the manifest's own completeness — every identity named, every reference narrowed to one scope, no wildcards, no duplicate identities, every grant dated — not that the app runs as declared; that answer lives in the platform's runtime, not in policy. This schema mirrors the shape rules of the Rego validator (policies/identity); the validator additionally enforces the semantic rules a JSON schema cannot — reviewedOn a real calendar date not in the future and not older than 365 days, since dates not in the future, no glob-shaped scopes, no duplicate identities, and the joins judged at the gate against the secrets catalog.",
+	"type": "object",
+	"required": ["version", "reviewedOn", "owner", "identities"],
+	"additionalProperties": true,
+	"properties": {
+		"version": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Version of the manifest. An unversioned manifest is a manifest nobody can pin a scope against."
+		},
+		"reviewedOn": {
+			"type": "string",
+			"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+			"description": "Date the manifest was last reviewed, YYYY-MM-DD. The validator flags reviews older than 365 days and dates in the future."
+		},
+		"owner": {
+			"type": "string",
+			"minLength": 1,
+			"description": "The team that owns the manifest and answers for the scopes it declares. A manifest with an owner and a review cadence is the discipline."
+		},
+		"identities": {
+			"type": "array",
+			"minItems": 1,
+			"description": "The identities the platform runs with credentials in hand, each declaring the secrets it references — the scopes the catalog is asked to vouch for, and nobody else's.",
+			"items": {
+				"type": "object",
+				"required": ["name", "references"],
+				"additionalProperties": true,
+				"properties": {
+					"name": {
+						"type": "string",
+						"minLength": 1,
+						"description": "The identity's name. The catalog admits consumers by this name, so an unnamed identity is permission nobody can revoke. One identity, one row."
+					},
+					"references": {
+						"type": "array",
+						"minItems": 1,
+						"description": "The secrets the identity references, one row per secret, each narrowed to the scope it uses.",
+						"items": {
+							"type": "object",
+							"required": ["secret", "scope", "since"],
+							"additionalProperties": true,
+							"properties": {
+								"secret": {
+									"type": "string",
+									"minLength": 1,
+									"description": "The referenced secret's name, as the secrets catalog declares it. A reference the catalog cannot vouch for is a secret outside the platform's word."
+								},
+								"scope": {
+									"type": "string",
+									"minLength": 1,
+									"description": "The scope the reference is narrowed to, exactly as the catalog grants it. A scope that means everything means the platform granted nothing it can name — the validator refuses wildcards and glob shapes."
+								},
+								"since": {
+									"type": "string",
+									"pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+									"description": "The day the reference was granted, YYYY-MM-DD. The validator flags grants dated in the future."
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

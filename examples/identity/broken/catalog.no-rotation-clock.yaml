@@ -1,0 +1,58 @@
+# Secrets catalog — The Software Field Guide, issue #108.
+#
+# The platform's word for the secrets that exist: each cataloged
+# secret names its kind, the one scope it grants (never a
+# wildcard), its rotation clock (the day it last rotated and the
+# age that clock must not reach), and the identities admitted as
+# its consumers — permission is granted here, never assumed by a
+# manifest.
+#
+# BROKEN VARIANT — the billing read token carries no rotation
+# clock: no rotatedOn, a credential the platform holds forever.
+# A leaked credential with no clock never ages out of usefulness.
+# The gate refuses: secret/rotated-on-required — a document the
+# gate cannot read is a question the gate refuses to answer.
+# Bites exactly once, and the verdict is unreadable.
+#
+# The estate is seeded, after the chapter's worked example: four
+# cataloged secrets for the payments platform, one of them with
+# its clock missing. Example dates are chosen relative to the CI
+# anchor date 2026-10-20.
+
+version: 4
+reviewedOn: 2026-10-19
+owner: Platform security
+
+secrets:
+  - name: payments-api-key
+    kind: api-key
+    scope: payments:charges
+    rotatedOn: 2026-09-30
+    maxAgeDays: 90
+    consumers:
+      - checkout-web
+      - checkout-worker
+
+  - name: settlement-signing-key
+    kind: signing-key
+    scope: settlements:sign
+    rotatedOn: 2026-10-01
+    maxAgeDays: 60
+    consumers:
+      - checkout-worker
+
+  # The billing read token — created once, never rotated, its
+  # clock's age never written.
+  - name: billing-read-token
+    kind: service-token
+    scope: billing:read
+    maxAgeDays: 90
+    consumers:
+      - billing-exporter
+
+  - name: reportstore-readonly
+    kind: service-token
+    scope: reportstore:read
+    rotatedOn: 2026-10-02
+    maxAgeDays: 180
+    consumers: []

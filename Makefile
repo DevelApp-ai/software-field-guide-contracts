@@ -4,7 +4,7 @@
 #   make fmt            format the Rego sources in place
 #   make check          compile-check the policies
 #   make test           run the Rego unit tests
-#   make build         compile the eighteen wasm bundles into build/wasm/
+#   make build         compile the nineteen wasm bundles into build/wasm/
 #   make site           assemble the deployable playground in site-build/
 #   make e2e            run the node wasm smoke test (needs `make build` first)
 #   make check-enclave FILE=examples/enclaves/checkout.yaml [TODAY=YYYY-MM-DD]
@@ -113,6 +113,16 @@
 #   make datacontract-demo the done-when proof: a declared check the
 #                      record never shows running caught citing both
 #                      files (runs the whole demo)
+#   make check-identity validate the identity manifest (its stamps,
+#                      every identity named, every reference narrowed
+#                      to one scope, no wildcards, no duplicates)
+#                      [IDENTITY_MANIFEST=...] [TODAY=...]
+#   make identity-gate gate the manifest against the secrets catalog
+#                      — deny-by-default [IDENTITY_MANIFEST=...
+#                      IDENTITY_CATALOG=...] [TODAY=...]
+#   make identity-demo the done-when proof: a secret with no rotation
+#                      clock and an undeclared identity caught citing
+#                      both files (runs the whole demo)
 
 # Requirements: opa (v1.21+), jq, yq (v4). CI pins TODAY to an anchor date so
 # the examples stay valid; locally TODAY defaults to the current date.
@@ -159,6 +169,8 @@ BROKER_GRANTS ?= examples/broker/grants.yaml
 LIFECYCLE_RECORD ?= examples/lifecycle/lifecycle.yaml
 DATACONTRACT ?= examples/datacontract/datacontract.yaml
 DATACONTRACT_ENFORCEMENT ?= examples/datacontract/enforcement.yaml
+IDENTITY_MANIFEST ?= examples/identity/manifest.yaml
+IDENTITY_CATALOG ?= examples/identity/catalog.yaml
 
 .PHONY: fmt check test build site e2e \
 	check-enclave check-seam check-bundle check-authz \
@@ -177,6 +189,7 @@ DATACONTRACT_ENFORCEMENT ?= examples/datacontract/enforcement.yaml
 	check-broker broker-gate broker-demo \
 	check-lifecycle lifecycle-gate lifecycle-demo \
 	check-datacontract datacontract-gate datacontract-demo \
+	check-identity identity-gate identity-demo \
 	examples ci
 
 fmt:
@@ -245,6 +258,9 @@ build:
 	$(OPA) build -t wasm -e datacontract/audit -o build/datacontract.tar.gz policies
 	tar -xzf build/datacontract.tar.gz -C build /policy.wasm
 	mv build/policy.wasm build/wasm/datacontract.wasm
+	$(OPA) build -t wasm -e identity/audit -o build/identity.tar.gz policies
+	tar -xzf build/identity.tar.gz -C build /policy.wasm
+	mv build/policy.wasm build/wasm/identity.wasm
 
 site: build
 	rm -rf site-build
@@ -1842,6 +1858,138 @@ datacontract-demo:
 	@echo "--- datacontract demo: all done-when proofs passed ---"
 
 
+# Validate the identity manifest alone — the platform's
+# identities as data: every identity named, every reference
+# narrowed to one scope, no wildcards, no duplicate identities,
+# every grant dated. The manifest's own completeness, before
+# the join.
+check-identity:
+	@test -f "$(IDENTITY_MANIFEST)" || { echo "usage: make check-identity [IDENTITY_MANIFEST=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(IDENTITY_MANIFEST)' \
+		| jq -cs --arg today "$(TODAY)" --arg manifestFile "$(IDENTITY_MANIFEST)" '{manifest: .[0], today: $$today, manifestFile: $$manifestFile}' \
+		| $(OPA) eval -d policies -I 'data.identity.validate' --format=pretty | tee build/check-identity.json
+	@jq -e '.valid == true' build/check-identity.json > /dev/null \
+		|| { echo "check-identity: the identity manifest is not valid — findings above"; exit 1; }
+
+# Gate the identity manifest against the secrets catalog — the
+# platform's word for the secrets that exist, the scope each
+# grants, and the rotation clock each must answer to. Scope gate,
+# not advisor, deny-by-default: a reference the catalog cannot
+# vouch for, an identity the catalog never admitted among a
+# secret's consumers, a scope the catalog never wrote, and a
+# rotation clock that ran out are all refused, not advised.
+identity-gate:
+	@test -f "$(IDENTITY_MANIFEST)" || { echo "usage: make identity-gate [IDENTITY_MANIFEST=... IDENTITY_CATALOG=...] [TODAY=YYYY-MM-DD]"; exit 2; }
+	@mkdir -p build
+	yq -o=json '.' '$(IDENTITY_MANIFEST)' '$(IDENTITY_CATALOG)' \
+		| jq -cs --arg today "$(TODAY)" --arg manifestFile "$(IDENTITY_MANIFEST)" --arg catalogFile "$(IDENTITY_CATALOG)" \
+			'{manifest: .[0], catalog: .[1], today: $$today, manifestFile: $$manifestFile, catalogFile: $$catalogFile}' \
+		| $(OPA) eval -d policies -I 'data.identity.gate' --format=pretty | tee build/identity-gate.json
+	@jq -e '.valid == true' build/identity-gate.json > /dev/null \
+		|| { echo "identity-gate: the identity manifest is not in conformance — findings above"; exit 1; }
+
+# The done-when proof for book issue #108: the identity and
+# secrets scope gate refuses. Runs the control pair end to end,
+# then proves every broken variant bites exactly once with its
+# named rule — two at validation, five at the join — and that
+# each bite renders its verdict honestly.
+identity-demo:
+	@echo "--- 1. the identity manifest validates ---"
+	@$(MAKE) check-identity TODAY=$(ANCHOR_TODAY)
+	@echo "--- 2. the control passes the gate and renders consistent ---"
+	@$(MAKE) identity-gate TODAY=$(ANCHOR_TODAY)
+	@grep -q '"verdict": "consistent"' build/identity-gate.json \
+		|| { echo "FAIL: the control gate did not render the consistent verdict"; cat build/identity-gate.json; exit 1; }
+	@jq -e '.cards | length == 4' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the control did not render one card per declared reference"; cat build/identity-gate.json; exit 1; }
+	@echo "control verdict: consistent — the whole board says so, one card per declared reference"
+	@echo "--- 3. a wildcard scope is caught at validation ---"
+	@if $(MAKE) check-identity IDENTITY_MANIFEST=examples/identity/broken/manifest.wildcard-scope.yaml TODAY=$(ANCHOR_TODAY) > build/identity-wildcard.txt 2>&1; \
+		then echo "FAIL: the wildcard scope passed validation"; cat build/identity-wildcard.txt; exit 1; \
+		else grep -q 'reference/scope-wildcard' build/identity-wildcard.txt \
+			|| { echo "FAIL: the validator failed without the wildcard rule"; cat build/identity-wildcard.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-identity.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-wildcard.txt; exit 1; }
+	@echo "caught as expected: reference/scope-wildcard — a scope that means everything means the platform granted nothing it can name"
+	@echo "--- 4. an identity declared twice is caught at validation ---"
+	@if $(MAKE) check-identity IDENTITY_MANIFEST=examples/identity/broken/manifest.duplicate-identity.yaml TODAY=$(ANCHOR_TODAY) > build/identity-duplicate.txt 2>&1; \
+		then echo "FAIL: the duplicate identity passed validation"; cat build/identity-duplicate.txt; exit 1; \
+		else grep -q 'identity/name-duplicate' build/identity-duplicate.txt \
+			|| { echo "FAIL: the validator failed without the duplicate rule"; cat build/identity-duplicate.txt; exit 1; }; \
+		fi
+	@test $$(jq '[.findings[] | select(.severity == "error")] | length' build/check-identity.json) -eq 1 \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-duplicate.txt; exit 1; }
+	@echo "caught as expected: identity/name-duplicate — one identity, one row"
+	@echo "--- 5. a reference the catalog cannot vouch for is caught at the join ---"
+	@if $(MAKE) identity-gate IDENTITY_MANIFEST=examples/identity/broken/manifest.phantom-secret.yaml TODAY=$(ANCHOR_TODAY) > build/identity-phantom.txt 2>&1; \
+		then echo "FAIL: the phantom reference passed the gate"; cat build/identity-phantom.txt; exit 1; \
+		else grep -q 'gate/reference-unresolved' build/identity-phantom.txt \
+			|| { echo "FAIL: the gate failed without the unresolved rule"; cat build/identity-phantom.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/identity-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/identity-gate.json; exit 1; }
+	@grep -q 'integration-webhook-secret' build/identity-phantom.txt \
+		|| { echo "FAIL: the finding does not name the secret the catalog never declared"; cat build/identity-phantom.txt; exit 1; }
+	@echo "caught as expected: gate/reference-unresolved naming integration-webhook-secret — a secret outside the platform's word"
+	@echo "--- 6. an identity the catalog never admitted is caught at the join ---"
+	@if $(MAKE) identity-gate IDENTITY_MANIFEST=examples/identity/broken/manifest.undeclared-identity.yaml TODAY=$(ANCHOR_TODAY) > build/identity-undeclared.txt 2>&1; \
+		then echo "FAIL: the undeclared identity passed the gate"; cat build/identity-undeclared.txt; exit 1; \
+		else grep -q 'gate/identity-undeclared' build/identity-undeclared.txt \
+			|| { echo "FAIL: the gate failed without the undeclared rule"; cat build/identity-undeclared.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/identity-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/identity-gate.json; exit 1; }
+	@grep -q 'billing-read-token' build/identity-undeclared.txt \
+		|| { echo "FAIL: the finding does not name the token the identity was never granted"; cat build/identity-undeclared.txt; exit 1; }
+	@echo "caught as expected: gate/identity-undeclared naming billing-read-token — permission is granted by the catalog, never assumed by the manifest"
+	@echo "--- 7. a scope the catalog never wrote is caught at the join ---"
+	@if $(MAKE) identity-gate IDENTITY_MANIFEST=examples/identity/broken/manifest.scope-mismatch.yaml TODAY=$(ANCHOR_TODAY) > build/identity-mismatch.txt 2>&1; \
+		then echo "FAIL: the ambitious scope passed the gate"; cat build/identity-mismatch.txt; exit 1; \
+		else grep -q 'gate/scope-mismatch' build/identity-mismatch.txt \
+			|| { echo "FAIL: the gate failed without the mismatch rule"; cat build/identity-mismatch.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/identity-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/identity-gate.json; exit 1; }
+	@grep -q 'payments:refunds' build/identity-mismatch.txt \
+		|| { echo "FAIL: the finding does not name the scope the catalog never wrote"; cat build/identity-mismatch.txt; exit 1; }
+	@echo "caught as expected: gate/scope-mismatch naming payments:refunds — scope minimality is the catalog's word, not the manifest's ambition"
+	@echo "--- 8. a secret with no rotation clock is caught, and the gate refuses to answer ---"
+	@if $(MAKE) identity-gate IDENTITY_CATALOG=examples/identity/broken/catalog.no-rotation-clock.yaml TODAY=$(ANCHOR_TODAY) > build/identity-no-clock.txt 2>&1; \
+		then echo "FAIL: the clockless secret passed the gate"; cat build/identity-no-clock.txt; exit 1; \
+		else grep -q 'secret/rotated-on-required' build/identity-no-clock.txt \
+			|| { echo "FAIL: the gate failed without the rotation-clock rule"; cat build/identity-no-clock.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-gate.json; exit 1; }
+	@grep -q '"verdict": "unreadable"' build/identity-gate.json \
+		|| { echo "FAIL: the gate did not render the unreadable verdict"; cat build/identity-gate.json; exit 1; }
+	@grep -q 'billing-read-token' build/identity-no-clock.txt \
+		|| { echo "FAIL: the finding does not name the secret with no rotation clock"; cat build/identity-no-clock.txt; exit 1; }
+	@echo "caught as expected: secret/rotated-on-required naming billing-read-token, verdict unreadable — a credential the platform holds forever"
+	@echo "--- 9. a rotation clock that ran out is caught at the join ---"
+	@if $(MAKE) identity-gate IDENTITY_CATALOG=examples/identity/broken/catalog.rotation-overdue.yaml TODAY=$(ANCHOR_TODAY) > build/identity-overdue.txt 2>&1; \
+		then echo "FAIL: the overdue clock passed the gate"; cat build/identity-overdue.txt; exit 1; \
+		else grep -q 'gate/rotation-overdue' build/identity-overdue.txt \
+			|| { echo "FAIL: the gate failed without the overdue rule"; cat build/identity-overdue.txt; exit 1; }; \
+		fi
+	@jq -e '[.findings[]] | length == 1' build/identity-gate.json > /dev/null \
+		|| { echo "FAIL: the variant must bite exactly once"; cat build/identity-gate.json; exit 1; }
+	@grep -q '"verdict": "drifts"' build/identity-gate.json \
+		|| { echo "FAIL: the gate did not render the drifts verdict"; cat build/identity-gate.json; exit 1; }
+	@grep -q 'settlement-signing-key' build/identity-overdue.txt \
+		|| { echo "FAIL: the finding does not name the secret past its clock"; cat build/identity-overdue.txt; exit 1; }
+	@echo "caught as expected: gate/rotation-overdue naming settlement-signing-key — a credential attackers get extra time with"
+	@echo "--- identity demo: all done-when proofs passed ---"
+
+
 # Validate every shipped example against the CI anchor date.
 examples:
 	$(MAKE) check-enclave FILE=examples/enclaves/checkout.yaml TODAY=$(ANCHOR_TODAY)
@@ -1878,7 +2026,9 @@ examples:
 	$(MAKE) lifecycle-gate TODAY=$(ANCHOR_TODAY)
 	$(MAKE) check-datacontract TODAY=$(ANCHOR_TODAY)
 	$(MAKE) datacontract-gate TODAY=$(ANCHOR_TODAY)
+	$(MAKE) check-identity TODAY=$(ANCHOR_TODAY)
+	$(MAKE) identity-gate TODAY=$(ANCHOR_TODAY)
 
 # Everything CI runs, in order.
-ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo broker-demo lifecycle-demo datacontract-demo
+ci: check test examples e2e obs-demo alerts-demo actions-demo erasure-demo segment-demo ingress-demo citizen-demo component-demo matrix-demo policy-demo compliance-demo broker-demo lifecycle-demo datacontract-demo identity-demo
 	$(OPA) fmt --fail -l policies
